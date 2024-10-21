@@ -1,3 +1,4 @@
-#include "defines.h"
+#pragma once
 
-EGNAPI void engine_test();
+#include "core/engine.h"
+#include "core/logger.h"

@@ -30,13 +30,14 @@ typedef char b8;
 #endif
 
 // Platform detection
-#if defined(WIN32) || defined(_WIN32) || defined(__WIN32__) 
+#if defined(WIN32) || defined(_WIN32) || defined(__WIN32__)
 #define EGNPLATFORM_WINDOWS 1
 #ifndef _WIN64
 #error "64-bit is required on Windows!"
 #endif
 #elif defined(__linux__) || defined(__gnu_linux__)
-#define ENGPLATFORM_LINUX 1
+#define EGNPLATFORM_LINUX 1
+#define EGNPLATFORM_WAYLAND
 #else
 #error "Unknown platform!"
 #endif
@@ -58,5 +59,4 @@ typedef char b8;
 #endif
 
 #define EGNCLAMP(value, min, max) (value <= min) ? min : (value >= max) ? max \
-                                                                      : value;
-
+                                                                        : value;
