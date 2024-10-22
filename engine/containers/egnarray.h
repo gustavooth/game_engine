@@ -2,22 +2,23 @@
 
 #include "defines.h"
 
-/** 
+/**
  * Memory layout
  * u64 capacity = number elements that can be held
  * u64 length = number of elements currently contained
  * u64 stride = size of each element in bytes
  * data = array of elements
  */
-typedef void* egnarray;
+typedef void *egnarray;
 
-enum {
-    EGNARRAY_CAPACITY,
-    EGNARRAY_LENGTH,
-    EGNARRAY_STRIDE,
+enum
+{
+  EGNARRAY_CAPACITY,
+  EGNARRAY_LENGTH,
+  EGNARRAY_STRIDE,
 
-    EGNARRAY_DATA,
-    EGNARRAY_FIELD_LENGTH = 3,
+  EGNARRAY_DATA,
+  EGNARRAY_FIELD_LENGTH = 3,
 };
 
 EGNAPI egnarray _egnarray_create(u32 capacity, u32 stride);
@@ -28,7 +29,7 @@ EGNAPI void _egnarray_field_set(egnarray arr, u32 field, u32 value);
 
 EGNAPI egnarray _egnarray_extend(egnarray arr, u32 new_capacity);
 
-EGNAPI egnarray _egnarray_push(egnarray arr, void* value_ptr);
+EGNAPI egnarray _egnarray_push(egnarray arr, void *value_ptr);
 
 /**
  * Remove the last item from the array.
@@ -75,9 +76,10 @@ EGNAPI void egnarray_pop_at(egnarray arr, u32 index);
  * @param egnarray Dynamic array.
  * @param value_ptr Value pointer.
  */
-#define egnarray_push(egnarray, value_ptr) {        \
+#define egnarray_push(egnarray, value_ptr)          \
+  {                                                 \
     egnarray = _egnarray_push(egnarray, value_ptr); \
-}
+  }
 
 /**
  * This function returns the number of items in the array.

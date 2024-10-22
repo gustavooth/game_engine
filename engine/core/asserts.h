@@ -15,42 +15,42 @@
 
 EGNAPI void report_assertion_failure(const char *expression, const char *message, const char *file, i32 line);
 
-#define EGNASSERT(expr)                                              \
-    {                                                                \
-        if (expr)                                                    \
-        {                                                            \
-        }                                                            \
-        else                                                         \
-        {                                                            \
-            report_assertion_failure(#expr, "", __FILE__, __LINE__); \
-            debugBreak();                                            \
-        }                                                            \
-    }
+#define EGNASSERT(expr)                                        \
+  {                                                            \
+    if (expr)                                                  \
+    {                                                          \
+    }                                                          \
+    else                                                       \
+    {                                                          \
+      report_assertion_failure(#expr, "", __FILE__, __LINE__); \
+      debugBreak();                                            \
+    }                                                          \
+  }
 
-#define EGNASSERT_MSG(expr, message)                                      \
-    {                                                                     \
-        if (expr)                                                         \
-        {                                                                 \
-        }                                                                 \
-        else                                                              \
-        {                                                                 \
-            report_assertion_failure(#expr, message, __FILE__, __LINE__); \
-            debugBreak();                                                 \
-        }                                                                 \
-    }
+#define EGNASSERT_MSG(expr, message)                                \
+  {                                                                 \
+    if (expr)                                                       \
+    {                                                               \
+    }                                                               \
+    else                                                            \
+    {                                                               \
+      report_assertion_failure(#expr, message, __FILE__, __LINE__); \
+      debugBreak();                                                 \
+    }                                                               \
+  }
 
 #ifdef _DEBUG
-#define EGNASSERT_DEBUG(expr)                                        \
-    {                                                                \
-        if (expr)                                                    \
-        {                                                            \
-        }                                                            \
-        else                                                         \
-        {                                                            \
-            report_assertion_failure(#expr, "", __FILE__, __LINE__); \
-            debugBreak();                                            \
-        }                                                            \
-    }
+#define EGNASSERT_DEBUG(expr)                                  \
+  {                                                            \
+    if (expr)                                                  \
+    {                                                          \
+    }                                                          \
+    else                                                       \
+    {                                                          \
+      report_assertion_failure(#expr, "", __FILE__, __LINE__); \
+      debugBreak();                                            \
+    }                                                          \
+  }
 #else
 #define EGNASSERT_DEBUG(expr) // Does nothing at all
 #endif
