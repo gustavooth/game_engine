@@ -6,6 +6,7 @@
 #include "clock.h"
 #include "platform/platform.h"
 #include "platform/window.h"
+#include "renderer/renderer.h"
 
 #include <stdio.h>
 
@@ -56,21 +57,22 @@ b8 application_on_key(u16 code, void *sender, EventContext data)
 
 EGNAPI b8 engine_initialize(EngineSettings *settings)
 {
-  INIT(logger_initialize(), "Failed to initialize logger!");
+  INIT(logger_initialize(), "failed to initialize logger!");
 
-  INIT(platform_initialize(), "Failed to initialize platform!");
+  INIT(platform_initialize(), "failed to initialize platform!");
   clock_start(&engine.clock);
 
-  INIT(memo_initialize(), "Failed to initialize rexmemory!");
-  INIT(event_initialize(), "Failed to initialize events!");
-  INIT(input_initialize(), "Failed to initialize inputs!");
+  INIT(memo_initialize(), "failed to initialize rexmemory!");
+  INIT(event_initialize(), "failed to initialize events!");
+  INIT(input_initialize(), "failed to initialize inputs!");
 
   INIT(window_create(settings->window_name,
                      settings->window_pos_x, settings->window_pos_y, settings->window_width, settings->window_height, &engine.window),
-       "Failed to create window!");
-
+       "failed to create window!");
 
   window_show(&engine.window);
+
+  INIT(renderer_initialize(&engine.window), "failed to initialize renderer!")
 
   event_register(EVENT_CODE_APPLICATION_QUIT, 0, &application_on_event);
   event_register(EVENT_CODE_KEY_PRESSED, 0, &application_on_key);

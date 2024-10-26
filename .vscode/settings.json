@@ -4,6 +4,10 @@
     "platform.h": "c",
     "chrono": "c",
     "cstring": "c",
-    "stdio.h": "c"
+    "stdio.h": "c",
+    "memo.h": "c",
+    "vkrenderer_platform.h": "c",
+    "window_wayland.h": "c",
+    "defines.h": "c"
   }
 }

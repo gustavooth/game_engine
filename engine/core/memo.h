@@ -25,12 +25,7 @@ EGNAPI void *memo_set(void *dest, i32 value, u64 size);
 
 #define MEMOALLOC(size, tag) memo_allocate(size, tag)
 
-#define MEMOZALLOC(size, tag)                \
-  {                                          \
-    void *_block = memo_allocate(size, tag); \
-    memo_set(_block, 0, size);               \
-    return block                             \
-  }
+#define MEMOZALLOC(size, tag) memo_set(memo_allocate(size, tag), 0, size)
 
 #define MEMOFREE(block) memo_free(block)
 #define MEMOZERO(block, size) memo_set(block, 0, size)

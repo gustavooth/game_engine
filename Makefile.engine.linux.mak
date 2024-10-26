@@ -9,7 +9,7 @@ OBJ_DIR = obj
 SRC = $(shell find $(SRC_DIR) -name '*.c')
 OBJ = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRC))
 
-C_FLAGS = -g -fPIC
+C_FLAGS = -g -Wall -fPIC
 INC_FLAGS = -I$(SRC_DIR) -I/usr/include
 LINK_FLAGS = -shared -lwayland-client -lvulkan
 DEFINES = -DEGNEXPORT
@@ -20,7 +20,7 @@ all: $(BUILD_DIR)/libengine.so
 # Cria a biblioteca compartilhada
 $(BUILD_DIR)/libengine.so: $(OBJ)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(LINK_FLAGS) $(OBJ) -o $@
+	$(CC) $(C_FLAGS) $(LINK_FLAGS) $(OBJ) -o $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
