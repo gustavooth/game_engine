@@ -5,25 +5,42 @@
 #include "vkrenderer_device.h"
 #include "vkrenderer_platform.h"
 #include "platform/window.h"
+#include "vkrenderer_swapchain.h"
+#include "vkrenderer_renderpass.h"
+#include "vkrenderer_command_buffer.h"
 
-static VKContext ctx;
+static VkContext ctx;
 
 b8 create_instance();
 b8 setup_debug_messenger();
+b8 find_memory_index(u32 type_filter, u32 property_flags, u32 *out_index);
 
-b8 renderer_initialize(Window *win)
+void create_command_buffers();
+void destroy_command_buffers();
+
+b8 renderer_initialize(Window *win, u32 width, u32 height)
 {
   EGNDEBUG("VKRENDERER initializing...")
+
+  ctx.allocator = NULL;
+  ctx.find_memory_index = find_memory_index;
+  ctx.framebuffer_width = width;
+  ctx.framebuffer_height = height;
 
   if (!create_instance())
     return false;
   if (!setup_debug_messenger())
     return false;
-  if (!vkrenderer_create_surface(&ctx, win))
+  if (!vkrenderer_surface_create(&ctx, win))
     return false;
-  if (!vkrenderer_create_device(&ctx))
+  if (!vkrenderer_device_create(&ctx))
     return false;
-
+  if (!vkrenderer_swapchain_create(&ctx, width, height, &ctx.swapchain))
+    return false;
+  if (!vkrenderer_renderpass_create(&ctx, &ctx.main_renderpass, 0.0f, 0.0f, width, height, 0.0f, 0.0f, 0.1f, 1.0f, 1.0f, 0))
+    return false;
+  create_command_buffers();
+    
   EGNINFO("VKRENDERER Initialized!");
 
   return true;
@@ -31,7 +48,11 @@ b8 renderer_initialize(Window *win)
 
 void renderer_shutdown()
 {
-  vkDestroyInstance(ctx.instance, NULL);
+  destroy_command_buffers();
+  vkrenderer_swapchain_destroy(&ctx, &ctx.swapchain);
+  vkrenderer_device_destroy(&ctx);
+  vkrenderer_surface_destroy(&ctx);
+  vkDestroyInstance(ctx.instance, ctx.allocator);
 }
 
 b8 create_instance()
@@ -72,7 +93,7 @@ b8 create_instance()
   instance_info.enabledLayerCount = instance_layers_count;
   instance_info.ppEnabledLayerNames = instance_layers;
 
-  VKCHECK(vkCreateInstance(&instance_info, 0, &ctx.instance))
+  VKCHECK(vkCreateInstance(&instance_info, ctx.allocator, &ctx.instance))
 
   MEMOFREE(instance_extensions);
   MEMOFREE(instance_layers);
@@ -122,7 +143,49 @@ b8 setup_debug_messenger()
     return false;
   }
 
-  VKCHECK(func(ctx.instance, &debug_info, 0, &ctx.debug_messenger))
+  VKCHECK(func(ctx.instance, &debug_info, ctx.allocator, &ctx.debug_messenger))
 
   return true;
+}
+
+b8 find_memory_index(u32 type_filter, u32 property_flags, u32 *out_index)
+{
+  VkPhysicalDeviceMemoryProperties memory_properties;
+  vkGetPhysicalDeviceMemoryProperties(ctx.device.physical, &memory_properties);
+  for (u32 i = 0; i < memory_properties.memoryTypeCount; ++i)
+  {
+    // Check each memory type to see if its bit is set to 1.
+    if (type_filter & (1 << i) && (memory_properties.memoryTypes[i].propertyFlags & property_flags) == property_flags)
+    {
+      *out_index = i;
+      return true;
+    }
+  }
+
+  EGNWARN("VKRENDERER unable to find suitable memory type!");
+  return false;
+}
+
+void create_command_buffers() {
+  EGNDEBUG("VKRENDERER Creating command buffers...")
+
+  ctx.graphics_command_buffers = MEMOALLOC(sizeof(VkRendererCommandBuffer) * ctx.swapchain.image_count, MEMO_RENDERER);
+
+  for (u32 i = 0; i < ctx.swapchain.image_count; i++)
+  {
+    vkrenderer_command_buffer_allocate(&ctx, ctx.device.graphics_command_pool, true, &ctx.graphics_command_buffers[i]);
+  }
+}
+
+void destroy_command_buffers() {
+  if (!ctx.graphics_command_buffers)
+    return;
+  
+  for (u32 i = 0; i < ctx.swapchain.image_count; i++)
+  {
+    vkrenderer_command_buffer_free(&ctx, ctx.device.graphics_command_pool, &ctx.graphics_command_buffers[i]);
+  }
+
+  MEMOFREE(ctx.graphics_command_buffers);
+  ctx.graphics_command_buffers = 0;
 }

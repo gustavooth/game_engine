@@ -9,7 +9,7 @@ OBJ_DIR = obj
 SRC = $(shell find $(SRC_DIR) -name '*.c')
 OBJ = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRC))
 
-C_FLAGS = -g -Wall -fPIC
+C_FLAGS = -g -Wvarargs -Wall -Werror -fPIC
 INC_FLAGS = -I$(SRC_DIR) -I/usr/include
 LINK_FLAGS = -shared -lwayland-client -lvulkan
 DEFINES = -DEGNEXPORT

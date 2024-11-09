@@ -18,6 +18,7 @@ typedef double f64;
 
 // Boolean types
 typedef char b8;
+typedef int b32;
 
 #define true 1
 #define false 0

@@ -47,7 +47,7 @@ b8 application_on_key(u16 code, void *sender, EventContext data)
   {
     if (key == KEY_ESCAPE)
     {
-      EventContext ctx;
+      EventContext ctx = {0};
       event_fire(EVENT_CODE_APPLICATION_QUIT, 0, ctx);
     }
   }
@@ -72,7 +72,7 @@ EGNAPI b8 engine_initialize(EngineSettings *settings)
 
   window_show(&engine.window);
 
-  INIT(renderer_initialize(&engine.window), "failed to initialize renderer!")
+  INIT(renderer_initialize(&engine.window, settings->window_width, settings->window_height), "failed to initialize renderer!")
 
   event_register(EVENT_CODE_APPLICATION_QUIT, 0, &application_on_event);
   event_register(EVENT_CODE_KEY_PRESSED, 0, &application_on_key);

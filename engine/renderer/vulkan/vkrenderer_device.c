@@ -4,27 +4,6 @@
 #include "containers/egnarray.h"
 #include <string.h>
 
-typedef struct QueueFamilyIndexes
-{
-  u32 graphics_family_index; // queue family index
-  u32 graphics_index;        // queue index in family
-
-  u32 present_family_index;
-  u32 present_index;
-
-  u32 compute_family_index;
-  u32 compute_index;
-
-  u32 transfer_family_index;
-  u32 transfer_index;
-
-  // I need to know the index of queue families.
-  // I need to know how many queues will be needed in each queue family.
-  // It will be useful in creating the logical device.
-  u32 *queue_family_indexes; // EGNARRAY
-  u32 *queue_count;          // EGNARRAY
-} QueueFamilyIndexes;
-
 typedef struct PhysicalDeviceRequirements
 {
   b8 graphics_queue;
@@ -38,25 +17,26 @@ typedef struct PhysicalDeviceRequirements
   b8 sampler_anisotropy;
 } PhysicalDeviceRequirements;
 
-b8 pick_physical_device(VKContext *ctx, VkPhysicalDevice *out_device, QueueFamilyIndexes *out_queue_indexes);
+b8 pick_physical_device(VkContext *ctx, VkPhysicalDevice *out_device, VkRendererQueueIndexes *out_queue_indexes);
 
 b8 physical_device_meets_requirements(VkPhysicalDevice device, VkSurfaceKHR surface,
-                                      PhysicalDeviceRequirements *requirements, QueueFamilyIndexes *out_queue_indexes);
+                                      PhysicalDeviceRequirements *requirements, VkRendererQueueIndexes *out_queue_indexes);
 
-void destroy_queue_family_indexes(QueueFamilyIndexes *indexes);
+void destroy_queue_family_indexes(VkRendererQueueIndexes *indexes);
 
-b8 vkrenderer_create_device(VKContext *ctx)
+b8 detect_depth_format(VkRendererDevice *device);
+
+b8 vkrenderer_device_create(VkContext *ctx)
 {
-  QueueFamilyIndexes indexes;
-  if (!pick_physical_device(ctx, &ctx->device.physical, &indexes))
-    return false;
+  VkRendererQueueIndexes indexes;
+  EGNASSERT(pick_physical_device(ctx, &ctx->device.physical, &indexes) == true)
 
   EGNDEBUG("VKRENDERER creating logical device...");
 
   u32 queue_count = egnarray_len(indexes.queue_count);
   VkDeviceQueueCreateInfo *queue_info = MEMOZALLOC(sizeof(VkDeviceQueueCreateInfo) * queue_count, MEMO_RENDERER);
 
-  f32 **priorities = MEMOALLOC(sizeof(f32*) * queue_count, MEMO_RENDERER);
+  f32 **priorities = MEMOALLOC(sizeof(f32 *) * queue_count, MEMO_RENDERER);
 
   for (u32 i = 0; i < queue_count; i++)
   {
@@ -64,13 +44,13 @@ b8 vkrenderer_create_device(VKContext *ctx)
     queue_info[i].queueFamilyIndex = indexes.queue_family_indexes[i];
     queue_info[i].queueCount = indexes.queue_count[i];
 
-    //create an array with the priority of each queue
+    // create an array with the priority of each queue
     f32 *priorities2 = MEMOALLOC(sizeof(f32) * queue_info[i].queueCount, MEMO_RENDERER);
     MEMOSET(priorities2, (i32)1.0f, sizeof(f32) * queue_info[i].queueCount);
 
     queue_info[i].pQueuePriorities = priorities2;
 
-    //saves array pointer to free memory later
+    // saves array pointer to free memory later
     priorities[i] = priorities2;
   }
 
@@ -86,11 +66,28 @@ b8 vkrenderer_create_device(VKContext *ctx)
   device_info.enabledExtensionCount = 1;
   device_info.ppEnabledExtensionNames = &swapchain_ext;
 
-  VKCHECK(vkCreateDevice(ctx->device.physical, &device_info, NULL, &ctx->device.handle))
+  VKCHECK(vkCreateDevice(ctx->device.physical, &device_info, ctx->allocator, &ctx->device.handle))
 
-  vkGetDeviceQueue(ctx->device.handle, indexes.graphics_family_index, indexes.graphics_index, &ctx->graphics_queue);
-  vkGetDeviceQueue(ctx->device.handle, indexes.present_family_index, indexes.present_index, &ctx->present_queue);
-  vkGetDeviceQueue(ctx->device.handle, indexes.transfer_family_index, indexes.transfer_index, &ctx->transfer_queue);
+  vkGetDeviceQueue(ctx->device.handle, indexes.graphics_family_index, indexes.graphics_index, &ctx->device.graphics);
+  vkGetDeviceQueue(ctx->device.handle, indexes.present_family_index, indexes.present_index, &ctx->device.present);
+  vkGetDeviceQueue(ctx->device.handle, indexes.transfer_family_index, indexes.transfer_index, &ctx->device.transfer);
+
+  ctx->device.queue_indexes = indexes;
+
+  vkGetPhysicalDeviceProperties(ctx->device.physical, &ctx->device.properties);
+  vkGetPhysicalDeviceFeatures(ctx->device.physical, &ctx->device.features);
+  vkGetPhysicalDeviceMemoryProperties(ctx->device.physical, &ctx->device.memory);
+
+  vkrenderer_device_load_swapchain_support(ctx);
+  EGNASSERT(detect_depth_format(&ctx->device) == true);
+
+  EGNDEBUG("VKRENDERER Creating command pool...");
+
+  VkCommandPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+  pool_info.queueFamilyIndex = indexes.graphics_family_index;
+  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+  VKCHECK(vkCreateCommandPool(ctx->device.handle, &pool_info, ctx->allocator, &ctx->device.graphics_command_pool));
 
   destroy_queue_family_indexes(&indexes);
 
@@ -101,13 +98,32 @@ b8 vkrenderer_create_device(VKContext *ctx)
   return true;
 }
 
-void vkrenderer_destroy_device(VKContext *ctx)
+void vkrenderer_device_destroy(VkContext *ctx)
 {
-  vkDestroyDevice(ctx->device.handle, NULL);
+  vkDestroyDevice(ctx->device.handle, ctx->allocator);
+}
+
+void vkrenderer_device_load_swapchain_support(VkContext *ctx)
+{
+  if(ctx->device.swapchain_support.formats)
+    MEMOFREE(ctx->device.swapchain_support.formats);
+
+  if(ctx->device.swapchain_support.present_modes)
+    MEMOFREE(ctx->device.swapchain_support.present_modes);
+
+  VKCHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx->device.physical, ctx->surface, &ctx->device.swapchain_support.capabilities))
+
+  VKCHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(ctx->device.physical, ctx->surface, &ctx->device.swapchain_support.format_count, NULL))
+  ctx->device.swapchain_support.formats = MEMOALLOC(sizeof(VkSurfaceFormatKHR) * ctx->device.swapchain_support.format_count, MEMO_RENDERER);
+  VKCHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(ctx->device.physical, ctx->surface, &ctx->device.swapchain_support.format_count, ctx->device.swapchain_support.formats))
+
+  VKCHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(ctx->device.physical, ctx->surface, &ctx->device.swapchain_support.present_mode_count, NULL))
+  ctx->device.swapchain_support.present_modes = MEMOALLOC(sizeof(VkPresentModeKHR) * ctx->device.swapchain_support.present_mode_count, MEMO_RENDERER);
+  VKCHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(ctx->device.physical, ctx->surface, &ctx->device.swapchain_support.present_mode_count, ctx->device.swapchain_support.present_modes))
 }
 
 b8 physical_device_meets_requirements(VkPhysicalDevice device, VkSurfaceKHR surface,
-                                      PhysicalDeviceRequirements *requirements, QueueFamilyIndexes *out_queue_indexes)
+                                      PhysicalDeviceRequirements *requirements, VkRendererQueueIndexes *out_queue_indexes)
 {
   VkPhysicalDeviceProperties properties;
   vkGetPhysicalDeviceProperties(device, &properties);
@@ -129,7 +145,7 @@ b8 physical_device_meets_requirements(VkPhysicalDevice device, VkSurfaceKHR surf
   if (requirements->present_queue)
     required_queues_count++;
 
-  MEMOSET(out_queue_indexes, -1, sizeof(QueueFamilyIndexes));
+  MEMOSET(out_queue_indexes, -1, sizeof(VkRendererQueueIndexes));
   out_queue_indexes->queue_family_indexes = egnarray_reserve(u32, required_queues_count);
   out_queue_indexes->queue_count = egnarray_reserve(u32, required_queues_count);
 
@@ -270,7 +286,7 @@ b8 physical_device_meets_requirements(VkPhysicalDevice device, VkSurfaceKHR surf
   return true;
 }
 
-b8 pick_physical_device(VKContext *ctx, VkPhysicalDevice *out_device, QueueFamilyIndexes *out_queue_indexes)
+b8 pick_physical_device(VkContext *ctx, VkPhysicalDevice *out_device, VkRendererQueueIndexes *out_queue_indexes)
 {
   EGNDEBUG("VKRENDERER Choosing physical device...");
 
@@ -316,8 +332,36 @@ b8 pick_physical_device(VKContext *ctx, VkPhysicalDevice *out_device, QueueFamil
   return true;
 }
 
-void destroy_queue_family_indexes(QueueFamilyIndexes *indexes)
+void destroy_queue_family_indexes(VkRendererQueueIndexes *indexes)
 {
   egnarray_destroy(indexes->queue_count);
   egnarray_destroy(indexes->queue_family_indexes);
+}
+
+b8 detect_depth_format(VkRendererDevice *device) {
+  const u64 candidate_count = 3;
+
+  VkFormat candidates[3] = {
+    VK_FORMAT_D32_SFLOAT,
+    VK_FORMAT_D32_SFLOAT_S8_UINT,
+    VK_FORMAT_D24_UNORM_S8_UINT};
+  
+  u32 flags = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+  VkFormatProperties properties;
+  for (u64 i = 0; i < candidate_count; i++)
+  {
+    vkGetPhysicalDeviceFormatProperties(device->physical, candidates[i], &properties);
+
+    if ((properties.linearTilingFeatures & flags) == flags) {
+      device->depth_format = candidates[i];
+      return true;
+    }else if ((properties.optimalTilingFeatures & flags) == flags) {
+      device->depth_format  = candidates[i];
+      return true;
+    }
+  }
+
+  EGNERROR("VKRENDERER failed to detect depth format!");
+
+  return false;
 }
