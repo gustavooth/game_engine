@@ -105,10 +105,10 @@ void vkrenderer_device_destroy(VkContext *ctx)
 
 void vkrenderer_device_load_swapchain_support(VkContext *ctx)
 {
-  if(ctx->device.swapchain_support.formats)
+  if (ctx->device.swapchain_support.formats)
     MEMOFREE(ctx->device.swapchain_support.formats);
 
-  if(ctx->device.swapchain_support.present_modes)
+  if (ctx->device.swapchain_support.present_modes)
     MEMOFREE(ctx->device.swapchain_support.present_modes);
 
   VKCHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(ctx->device.physical, ctx->surface, &ctx->device.swapchain_support.capabilities))
@@ -338,25 +338,29 @@ void destroy_queue_family_indexes(VkRendererQueueIndexes *indexes)
   egnarray_destroy(indexes->queue_family_indexes);
 }
 
-b8 detect_depth_format(VkRendererDevice *device) {
+b8 detect_depth_format(VkRendererDevice *device)
+{
   const u64 candidate_count = 3;
 
   VkFormat candidates[3] = {
-    VK_FORMAT_D32_SFLOAT,
-    VK_FORMAT_D32_SFLOAT_S8_UINT,
-    VK_FORMAT_D24_UNORM_S8_UINT};
-  
+      VK_FORMAT_D32_SFLOAT,
+      VK_FORMAT_D32_SFLOAT_S8_UINT,
+      VK_FORMAT_D24_UNORM_S8_UINT};
+
   u32 flags = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
   VkFormatProperties properties;
   for (u64 i = 0; i < candidate_count; i++)
   {
     vkGetPhysicalDeviceFormatProperties(device->physical, candidates[i], &properties);
 
-    if ((properties.linearTilingFeatures & flags) == flags) {
+    if ((properties.linearTilingFeatures & flags) == flags)
+    {
       device->depth_format = candidates[i];
       return true;
-    }else if ((properties.optimalTilingFeatures & flags) == flags) {
-      device->depth_format  = candidates[i];
+    }
+    else if ((properties.optimalTilingFeatures & flags) == flags)
+    {
+      device->depth_format = candidates[i];
       return true;
     }
   }

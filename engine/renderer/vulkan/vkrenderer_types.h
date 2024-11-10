@@ -104,14 +104,20 @@ typedef struct VkRendererRenderpass
   VkRendererState state;
 } VkRendererRenderpass;
 
-typedef struct VkRendererCommandBuffer {
+typedef struct VkRendererCommandBuffer
+{
   VkCommandBuffer handle;
 
   VkRendererState state;
 } VkRendererCommandBuffer;
 
-typedef struct VkRendererFramebuffer {
-  VkFramebuffer famebuffer;
+typedef struct VkRendererFramebuffer
+{
+  VkFramebuffer handle;
+
+  u32 attachment_count;
+  VkImageView *attachments;
+  VkRendererRenderpass *renderpass;
 } VkRendererFramebuffer;
 
 typedef struct VkContext
@@ -133,6 +139,7 @@ typedef struct VkContext
   VkRendererRenderpass main_renderpass;
 
   VkRendererCommandBuffer *graphics_command_buffers;
+  VkRendererFramebuffer *framebuffers;
 
   b8 (*find_memory_index)(u32 type_filter, u32 property_flags, u32 *out_index);
 } VkContext;

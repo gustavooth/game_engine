@@ -8,6 +8,7 @@
 #include "vkrenderer_swapchain.h"
 #include "vkrenderer_renderpass.h"
 #include "vkrenderer_command_buffer.h"
+#include "vkrenderer_framebuffer.h"
 
 static VkContext ctx;
 
@@ -17,6 +18,8 @@ b8 find_memory_index(u32 type_filter, u32 property_flags, u32 *out_index);
 
 void create_command_buffers();
 void destroy_command_buffers();
+void create_framebuffers();
+void destroy_framebuffers();
 
 b8 renderer_initialize(Window *win, u32 width, u32 height)
 {
@@ -39,8 +42,10 @@ b8 renderer_initialize(Window *win, u32 width, u32 height)
     return false;
   if (!vkrenderer_renderpass_create(&ctx, &ctx.main_renderpass, 0.0f, 0.0f, width, height, 0.0f, 0.0f, 0.1f, 1.0f, 1.0f, 0))
     return false;
+
+  create_framebuffers();
   create_command_buffers();
-    
+
   EGNINFO("VKRENDERER Initialized!");
 
   return true;
@@ -49,6 +54,7 @@ b8 renderer_initialize(Window *win, u32 width, u32 height)
 void renderer_shutdown()
 {
   destroy_command_buffers();
+  destroy_framebuffers();
   vkrenderer_swapchain_destroy(&ctx, &ctx.swapchain);
   vkrenderer_device_destroy(&ctx);
   vkrenderer_surface_destroy(&ctx);
@@ -166,7 +172,8 @@ b8 find_memory_index(u32 type_filter, u32 property_flags, u32 *out_index)
   return false;
 }
 
-void create_command_buffers() {
+void create_command_buffers()
+{
   EGNDEBUG("VKRENDERER Creating command buffers...")
 
   ctx.graphics_command_buffers = MEMOALLOC(sizeof(VkRendererCommandBuffer) * ctx.swapchain.image_count, MEMO_RENDERER);
@@ -177,10 +184,11 @@ void create_command_buffers() {
   }
 }
 
-void destroy_command_buffers() {
+void destroy_command_buffers()
+{
   if (!ctx.graphics_command_buffers)
     return;
-  
+
   for (u32 i = 0; i < ctx.swapchain.image_count; i++)
   {
     vkrenderer_command_buffer_free(&ctx, ctx.device.graphics_command_pool, &ctx.graphics_command_buffers[i]);
@@ -188,4 +196,33 @@ void destroy_command_buffers() {
 
   MEMOFREE(ctx.graphics_command_buffers);
   ctx.graphics_command_buffers = 0;
+}
+
+void create_framebuffers()
+{
+  EGNDEBUG("VKRENDERER Creating framebuffers...")
+
+  ctx.framebuffers = MEMOALLOC(sizeof(VkRendererFramebuffer) * ctx.swapchain.image_count, MEMO_RENDERER);
+
+  for (u32 i = 0; i < ctx.swapchain.image_count; i++)
+  {
+    u32 attachment_count = 2;
+    VkImageView attachments[] = {
+        ctx.swapchain.views[i],
+        ctx.swapchain.depth_attachment.view};
+
+    vkrenderer_framebuffer_create(&ctx, &ctx.main_renderpass,
+                                  ctx.framebuffer_width, ctx.framebuffer_height,
+                                  attachment_count, attachments, &ctx.framebuffers[i]);
+  }
+}
+
+void destroy_framebuffers()
+{
+  for (u32 i = 0; i < ctx.swapchain.image_count; i++)
+  {
+    vkrenderer_framebuffer_destroy(&ctx, &ctx.framebuffers[i]);
+  }
+  
+  MEMOFREE(ctx.framebuffers);
 }

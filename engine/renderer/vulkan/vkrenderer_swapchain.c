@@ -1,6 +1,7 @@
 #include "vkrenderer_swapchain.h"
 #include "core/logger.h"
 #include "core/memo.h"
+#include "vkrenderer_image.h"
 
 b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapchain);
 void destroy(VkContext *ctx, VkRendererSwapchain *swapchain);
@@ -169,10 +170,18 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
     VKCHECK(vkCreateImageView(ctx->device.handle, &image_view_info, ctx->allocator, &out_swapchain->views[i]))
   }
 
+  vkrenderer_image_create(ctx, VK_IMAGE_TYPE_2D, swapchain_extent.width, swapchain_extent.height,
+                          ctx->device.depth_format, VK_IMAGE_TILING_OPTIMAL,
+                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                          true, VK_IMAGE_ASPECT_DEPTH_BIT, &out_swapchain->depth_attachment);
+
   return true;
 }
 
 void destroy(VkContext *ctx, VkRendererSwapchain *swapchain)
 {
   vkDestroySwapchainKHR(ctx->device.handle, swapchain->handle, ctx->allocator);
+  vkrenderer_destroy_image(ctx, &swapchain->depth_attachment);
+
+  MEMOZERO(swapchain, sizeof(VkRendererSwapchain));
 }

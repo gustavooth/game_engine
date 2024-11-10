@@ -1,7 +1,7 @@
 #include "vkrenderer_command_buffer.h"
 
 void vkrenderer_command_buffer_allocate(VkContext *ctx, VkCommandPool pool, b8 is_primary,
-                                      VkRendererCommandBuffer *out_command_buffer)
+                                        VkRendererCommandBuffer *out_command_buffer)
 {
   VkCommandBufferAllocateInfo info = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
   info.commandPool = pool;
@@ -34,7 +34,7 @@ void vkrenderer_command_buffer_begin(VkRendererCommandBuffer *command_buffer,
 
   if (is_simultaneous_use)
     begin_info.flags |= VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
-  
+
   VKCHECK(vkBeginCommandBuffer(command_buffer->handle, &begin_info));
 
   command_buffer->state = VKRENDERER_STATE_RECORDING;
@@ -77,7 +77,7 @@ void vkrenderer_command_buffer_end_single_use(VkContext *ctx,
                                               VkQueue queue)
 {
   vkrenderer_command_buffer_end(command_buffer);
-  
+
   VkSubmitInfo info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
   info.commandBufferCount = 1;
   info.pCommandBuffers = &command_buffer->handle;

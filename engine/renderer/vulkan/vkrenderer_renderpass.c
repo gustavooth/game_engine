@@ -7,7 +7,7 @@ b8 vkrenderer_renderpass_create(VkContext *ctx, VkRendererRenderpass *out_render
                                 f32 r, f32 g, f32 b, f32 a,
                                 f32 depth, u32 stencil)
 {
-  EGNDEBUG("VKRENDERER creating renderpass...");
+  EGNDEBUG("VKRENDERER Creating renderpass...");
 
   // Main subpass
   VkSubpassDescription subpass = {};

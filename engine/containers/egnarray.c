@@ -16,7 +16,6 @@ egnarray _egnarray_create(u32 capacity, u32 stride)
 void egnarray_destroy(egnarray arr)
 {
   u32 *header = (u32 *)arr - EGNARRAY_FIELD_LENGTH;
-  u32 total_size = (EGNARRAY_FIELD_LENGTH * sizeof(u32)) + (header[EGNARRAY_CAPACITY] * header[EGNARRAY_STRIDE]);
   free(header);
 }
 

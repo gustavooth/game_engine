@@ -38,7 +38,7 @@ void vkrenderer_image_create(
   vkGetImageMemoryRequirements(ctx->device.handle, out_image->handle, &memory_requirements);
 
   u32 memory_type;
-  EGNASSERT(ctx->find_memory_index(memory_requirements.memoryTypeBits, memory_flags, &memory_type) == true)
+  ctx->find_memory_index(memory_requirements.memoryTypeBits, memory_flags, &memory_type);
 
   // Allocate memory
   VkMemoryAllocateInfo memory_allocate_info = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
@@ -93,4 +93,7 @@ void vkrenderer_destroy_image(VkContext *ctx, VkRendererImage *image)
     vkDestroyImage(ctx->device.handle, image->handle, ctx->allocator);
     image->handle = 0;
   }
+
+  image->width = 0;
+  image->height = 0;
 }
