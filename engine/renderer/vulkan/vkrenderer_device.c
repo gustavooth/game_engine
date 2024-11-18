@@ -24,8 +24,6 @@ b8 physical_device_meets_requirements(VkPhysicalDevice device, VkSurfaceKHR surf
 
 void destroy_queue_family_indexes(VkRendererQueueIndexes *indexes);
 
-b8 detect_depth_format(VkRendererDevice *device);
-
 b8 vkrenderer_device_create(VkContext *ctx)
 {
   VkRendererQueueIndexes indexes;
@@ -79,7 +77,7 @@ b8 vkrenderer_device_create(VkContext *ctx)
   vkGetPhysicalDeviceMemoryProperties(ctx->device.physical, &ctx->device.memory);
 
   vkrenderer_device_load_swapchain_support(ctx);
-  EGNASSERT(detect_depth_format(&ctx->device) == true);
+  EGNASSERT(vkrenderer_device_detect_depth_format(&ctx->device) == true);
 
   EGNDEBUG("VKRENDERER Creating command pool...");
 
@@ -120,6 +118,38 @@ void vkrenderer_device_load_swapchain_support(VkContext *ctx)
   VKCHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(ctx->device.physical, ctx->surface, &ctx->device.swapchain_support.present_mode_count, NULL))
   ctx->device.swapchain_support.present_modes = MEMOALLOC(sizeof(VkPresentModeKHR) * ctx->device.swapchain_support.present_mode_count, MEMO_RENDERER);
   VKCHECK(vkGetPhysicalDeviceSurfacePresentModesKHR(ctx->device.physical, ctx->surface, &ctx->device.swapchain_support.present_mode_count, ctx->device.swapchain_support.present_modes))
+}
+
+b8 vkrenderer_device_detect_depth_format(VkRendererDevice *device)
+{
+  const u64 candidate_count = 3;
+
+  VkFormat candidates[3] = {
+      VK_FORMAT_D32_SFLOAT,
+      VK_FORMAT_D32_SFLOAT_S8_UINT,
+      VK_FORMAT_D24_UNORM_S8_UINT};
+
+  u32 flags = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+  VkFormatProperties properties;
+  for (u64 i = 0; i < candidate_count; i++)
+  {
+    vkGetPhysicalDeviceFormatProperties(device->physical, candidates[i], &properties);
+
+    if ((properties.linearTilingFeatures & flags) == flags)
+    {
+      device->depth_format = candidates[i];
+      return true;
+    }
+    else if ((properties.optimalTilingFeatures & flags) == flags)
+    {
+      device->depth_format = candidates[i];
+      return true;
+    }
+  }
+
+  EGNERROR("VKRENDERER failed to detect depth format!");
+
+  return false;
 }
 
 b8 physical_device_meets_requirements(VkPhysicalDevice device, VkSurfaceKHR surface,
@@ -336,36 +366,4 @@ void destroy_queue_family_indexes(VkRendererQueueIndexes *indexes)
 {
   egnarray_destroy(indexes->queue_count);
   egnarray_destroy(indexes->queue_family_indexes);
-}
-
-b8 detect_depth_format(VkRendererDevice *device)
-{
-  const u64 candidate_count = 3;
-
-  VkFormat candidates[3] = {
-      VK_FORMAT_D32_SFLOAT,
-      VK_FORMAT_D32_SFLOAT_S8_UINT,
-      VK_FORMAT_D24_UNORM_S8_UINT};
-
-  u32 flags = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
-  VkFormatProperties properties;
-  for (u64 i = 0; i < candidate_count; i++)
-  {
-    vkGetPhysicalDeviceFormatProperties(device->physical, candidates[i], &properties);
-
-    if ((properties.linearTilingFeatures & flags) == flags)
-    {
-      device->depth_format = candidates[i];
-      return true;
-    }
-    else if ((properties.optimalTilingFeatures & flags) == flags)
-    {
-      device->depth_format = candidates[i];
-      return true;
-    }
-  }
-
-  EGNERROR("VKRENDERER failed to detect depth format!");
-
-  return false;
 }

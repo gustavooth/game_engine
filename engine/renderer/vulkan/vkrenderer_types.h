@@ -120,14 +120,17 @@ typedef struct VkRendererFramebuffer
   VkRendererRenderpass *renderpass;
 } VkRendererFramebuffer;
 
+typedef struct VkRendererFence
+{
+  VkFence handle;
+  b8 is_signaled;
+} VkRendererFence;
+
 typedef struct VkContext
 {
   VkInstance instance;
   VkDebugUtilsMessengerEXT debug_messenger;
   VkAllocationCallbacks *allocator;
-
-  u32 framebuffer_width;
-  u32 framebuffer_height;
 
   VkSurfaceKHR surface;
   VkRendererDevice device;
@@ -135,11 +138,26 @@ typedef struct VkContext
   VkRendererSwapchain swapchain;
   u32 image_index;
   u32 current_frame;
+  b8 recreating_swapchain;
 
   VkRendererRenderpass main_renderpass;
 
+  u32 framebuffer_width;
+  u32 framebuffer_height;
+  u64 framebuffer_generation;
+
+  // image count
   VkRendererCommandBuffer *graphics_command_buffers;
   VkRendererFramebuffer *framebuffers;
+
+  // max frames in flight
+  VkSemaphore *image_available_semaphores;
+  VkSemaphore *queue_complete_semaphores;
+
+  // max frames in flight
+  VkRendererFence *in_flight_fences;
+  // image count
+  VkRendererFence **images_in_flight;
 
   b8 (*find_memory_index)(u32 type_filter, u32 property_flags, u32 *out_index);
 } VkContext;

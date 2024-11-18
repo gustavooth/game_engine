@@ -111,7 +111,8 @@ EGNAPI b8 engine_initialize(EngineSettings *settings)
 
     input_update(delta);
 
-    // TODO: render
+    RenderPacket packet = {delta};
+    renderer_draw_frame(packet);
   }
 
   return true;

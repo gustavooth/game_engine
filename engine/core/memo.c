@@ -46,7 +46,7 @@ void memo_free(void *block)
 
 #if LOG_WARN_ENABLED == 1
   if (data->tag == MEMO_UNKNOWN)
-    EGNWARN("memo_allocate called using memo_TAG_UNKNOWN.");
+    EGNWARN("memo_free called using memo_TAG_UNKNOWN.");
 #endif
 
   state.tagged_allocations[data->tag] -= data->length + sizeof(MemoryData);
