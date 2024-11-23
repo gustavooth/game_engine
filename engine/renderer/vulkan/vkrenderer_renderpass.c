@@ -14,8 +14,8 @@ b8 vkrenderer_renderpass_create(VkContext *ctx, VkRendererRenderpass *out_render
   subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 
   // Attachments TODO: make this configurable.
-  u32 attachment_description_count = 2;
-  VkAttachmentDescription attachment_descriptions[attachment_description_count];
+  enum { ATTACHMENT_DESCRIPTION_COUNT = 2 };
+  VkAttachmentDescription attachment_descriptions[ATTACHMENT_DESCRIPTION_COUNT];
 
   // Color attachment
   VkAttachmentDescription color_attachment;
@@ -76,7 +76,7 @@ b8 vkrenderer_renderpass_create(VkContext *ctx, VkRendererRenderpass *out_render
   dependency.dependencyFlags = 0;
   // Render pass create.
   VkRenderPassCreateInfo render_pass_create_info = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-  render_pass_create_info.attachmentCount = attachment_description_count;
+  render_pass_create_info.attachmentCount = ATTACHMENT_DESCRIPTION_COUNT;
   render_pass_create_info.pAttachments = attachment_descriptions;
   render_pass_create_info.subpassCount = 1;
   render_pass_create_info.pSubpasses = &subpass;

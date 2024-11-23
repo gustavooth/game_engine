@@ -1,3 +1,5 @@
+#pragma once
+
 #include "vkrenderer_types.h"
 
 void vkrenderer_fence_create(VkContext *ctx, b8 create_signaled, VkRendererFence *out_fence);

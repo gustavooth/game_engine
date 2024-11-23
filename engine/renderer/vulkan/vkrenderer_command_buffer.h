@@ -1,3 +1,5 @@
+#pragma once
+
 #include "vkrenderer_types.h"
 
 void vkrenderer_command_buffer_allocate(VkContext *ctx, VkCommandPool pool, b8 is_primary,

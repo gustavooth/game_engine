@@ -1,3 +1,5 @@
+#pragma once
+
 #include "vkrenderer_types.h"
 
 void vkrenderer_framebuffer_create(VkContext *ctx, VkRendererRenderpass *renderpass,

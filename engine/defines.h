@@ -17,7 +17,7 @@ typedef float f32;
 typedef double f64;
 
 // Boolean types
-typedef char b8;
+typedef _Bool b8;
 typedef int b32;
 
 #define true 1
@@ -61,3 +61,12 @@ typedef int b32;
 
 #define EGNCLAMP(value, min, max) (value <= min) ? min : (value >= max) ? max \
                                                                         : value;
+
+// Inlining
+#ifdef _MSC_VER
+#define EGNINLINE __forceinline
+#define EGNNOINLINE __declspec(noinline)
+#else
+#define EGNINLINE static inline
+#define EGNNOINLINE
+#endif

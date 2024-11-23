@@ -37,7 +37,7 @@ b8 application_on_event(u16 code, void *sender, EventContext data)
   }
   }
 
-  return true;
+  return false;
 }
 
 b8 application_on_key(u16 code, void *sender, EventContext data)
@@ -52,7 +52,15 @@ b8 application_on_key(u16 code, void *sender, EventContext data)
     }
   }
 
-  return true;
+  return false;
+}
+
+b8 application_on_resize(u16 code, void *sender, EventContext data) {
+  EGNDEBUG("Event EVENT_CODE_RESIZED received!")
+
+  renderer_resize((u32)data.data.u16[0], (u32)data.data.u16[1]);
+
+  return false;
 }
 
 EGNAPI b8 engine_initialize(EngineSettings *settings)
@@ -77,9 +85,11 @@ EGNAPI b8 engine_initialize(EngineSettings *settings)
   event_register(EVENT_CODE_APPLICATION_QUIT, 0, &application_on_event);
   event_register(EVENT_CODE_KEY_PRESSED, 0, &application_on_key);
   event_register(EVENT_CODE_KEY_RELEASED, 0, &application_on_key);
+  event_register(EVENT_CODE_RESIZED, 0, &application_on_resize);
 
   engine.running = true;
   clock_update(&engine.clock);
+
   EGNINFO("Game Engine has been initialized in %f seconds!", engine.clock.elapsed);
 
   clock_start(&engine.clock);

@@ -72,7 +72,6 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
   EGNDEBUG("VKRENDERER Creating swapchain...");
 
   VkExtent2D swapchain_extent = {width, height};
-  out_swapchain->max_frame_in_flight = 2;
 
   VkRendererSwapchainSupport support = ctx->device.swapchain_support;
 
@@ -111,6 +110,8 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
   u32 image_count = support.capabilities.minImageCount + 1;
   if (support.capabilities.maxImageCount > 0 && image_count > support.capabilities.maxImageCount)
     image_count = support.capabilities.maxImageCount;
+
+  out_swapchain->max_frame_in_flight = image_count - 1;
 
   VkSwapchainCreateInfoKHR swapchain_info = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
   swapchain_info.surface = ctx->surface;
@@ -180,6 +181,8 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
 
 void destroy(VkContext *ctx, VkRendererSwapchain *swapchain)
 {
+  vkDeviceWaitIdle(ctx->device.handle);
+
   vkDestroySwapchainKHR(ctx->device.handle, swapchain->handle, ctx->allocator);
   vkrenderer_destroy_image(ctx, &swapchain->depth_attachment);
 

@@ -11,6 +11,7 @@
     "defines.h": "c",
     "algorithm": "c",
     "format": "c",
-    "egnarray.h": "c"
+    "egnarray.h": "c",
+    "cmath": "cpp"
   }
 }
