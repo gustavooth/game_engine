@@ -12,6 +12,7 @@
     "algorithm": "c",
     "format": "c",
     "egnarray.h": "c",
-    "cmath": "cpp"
+    "cmath": "cpp",
+    "linear_allocator.h": "c"
   }
 }
