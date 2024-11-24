@@ -8,6 +8,8 @@
 #include "platform/window.h"
 #include "renderer/renderer.h"
 
+#include "core/egnstring.h"
+
 #include <stdio.h>
 
 typedef struct engine_state

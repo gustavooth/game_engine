@@ -13,6 +13,9 @@
     "format": "c",
     "egnarray.h": "c",
     "cmath": "cpp",
-    "linear_allocator.h": "c"
+    "linear_allocator.h": "c",
+    "egnstring.h": "c",
+    "sstream": "c",
+    "thread": "c"
   }
 }

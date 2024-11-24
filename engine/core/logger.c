@@ -27,7 +27,7 @@ void log_output(LogLevel level, const char *message, ...)
   const i32 msg_length = 1024;
 
   char out_message[1024];
-  memset(out_message, 0, sizeof(out_message));
+  memset(out_message, '\0', sizeof(out_message));
 
   va_list arg_ptr;
   va_start(arg_ptr, message);

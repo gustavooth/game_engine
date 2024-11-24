@@ -24,11 +24,6 @@ EGNAPI void linear_allocator_destroy(LinearAllocator *allocator) {
 }
 
 EGNAPI void* linear_allocator_allocate(LinearAllocator *allocator, u64 size) {
-  if (!allocator){
-    EGNERROR("linear_allocator_allocate: allocator is null.");
-    return 0;
-  }
-
   u64 remaining = allocator->total_size - allocator->allocated;
 
   if (remaining < size)

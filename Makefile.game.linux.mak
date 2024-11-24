@@ -40,7 +40,7 @@ $(ASSEMBLY_DIR)/$(ENGINE_LIB):
 	make -f Makefile.engine.linux.mak
 
 run: build
-	./$(BUILD_DIR)/$(EXE)
+	./$(ASSEMBLY_DIR)/$(EXE)
 
 clean:
 	$(info $(CORE_BUILD_DIR) $(ASSEMBLY_DIR))
