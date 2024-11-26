@@ -16,6 +16,14 @@
     "linear_allocator.h": "c",
     "egnstring.h": "c",
     "sstream": "c",
-    "thread": "c"
+    "thread": "c",
+    "charconv": "c",
+    "optional": "c",
+    "ratio": "c",
+    "array": "c",
+    "functional": "c",
+    "tuple": "c",
+    "type_traits": "c",
+    "utility": "c"
   }
 }

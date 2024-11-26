@@ -3,7 +3,7 @@
 #include "defines.h"
 #include "containers/egnarray.h"
 
-b8 platform_initialize();
+b8 platform_initialize(u64* out_memory_requirement, void* state);
 void platform_shutdown();
 
 void *platform_allocate(u64 size, b8 aligned);

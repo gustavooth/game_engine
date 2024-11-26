@@ -7,7 +7,7 @@
                 "command": "${workspaceFolder}/build.bat",
             },
             "linux": {
-                "command": "make -f Makefile.game_test.linux.mak"
+                "command": "make build"
             },
             "options": {
                 "cwd": "${workspaceFolder}"

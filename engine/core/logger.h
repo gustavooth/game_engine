@@ -22,7 +22,7 @@ typedef enum LogLevel
   LOG_LEVEL_TRACE = 5
 } LogLevel;
 
-b8 logger_initialize();
+b8 logger_initialize(u64 *out_memory_requirement, void *state);
 void logger_shutdown();
 
 EGNAPI void log_output(LogLevel level, const char *message, ...);

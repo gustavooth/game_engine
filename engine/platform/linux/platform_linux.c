@@ -8,19 +8,30 @@
 
 #ifdef EGNPLATFORM_WAYLAND
 
-// Clock
-static struct timeval start_time;
-
-b8 platform_initialize()
+typedef struct PlatformLinuxState
 {
-  // Clock setup usando gettimeofday
-  if (gettimeofday(&start_time, NULL) != 0)
+  struct timeval start_time;
+} PlatformLinuxState;
+
+static PlatformLinuxState *platform_ptr;
+
+b8 platform_initialize(u64 *out_memory_requirement, void *state)
+{
+  if (!state)
   {
-    EGNERROR("Failed to initialize clock");
+    *out_memory_requirement = sizeof(PlatformLinuxState);
+    return false;
+  }
+  platform_ptr = (PlatformLinuxState *)state;
+
+  // Clock setup usando gettimeofday
+  if (gettimeofday(&platform_ptr->start_time, NULL) != 0)
+  {
+    EGNERROR("platform_initialize: failed to initialize clock");
     return false;
   }
 
-  EGNINFO("Linux Platform System initialized!");
+  EGNINFO("Core Linux Platform initialized!");
   return true;
 }
 
@@ -74,8 +85,8 @@ f64 platform_get_absolute_time()
   gettimeofday(&current_time, NULL);
 
   // Calcula a diferença em segundos e microssegundos
-  i64 seconds = current_time.tv_sec - start_time.tv_sec;
-  i64 microseconds = current_time.tv_usec - start_time.tv_usec;
+  i64 seconds = current_time.tv_sec - platform_ptr->start_time.tv_sec;
+  i64 microseconds = current_time.tv_usec - platform_ptr->start_time.tv_usec;
 
   // Retorna o tempo total em segundos como um f64
   return (f64)seconds + (f64)microseconds / 1e6;

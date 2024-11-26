@@ -27,8 +27,8 @@ typedef struct EventContext
 
 typedef b8 (*PFN_on_event)(u16 code, void *sender, EventContext data);
 
-b8 event_initialize();
-void event_shutdown();
+b8 events_initialize(u64 *out_memory_requirement, void *state);
+void events_shutdown();
 
 /**
  * Register to listen for when events are sent with the provided code.
@@ -36,7 +36,7 @@ void event_shutdown();
  * @param listener A pointer to a listener instance. Can be 0/NULL.
  * @param on_event The callback function pointer to be invoked when the event code is fired.
  */
-EGNAPI void event_register(u16 code, void *listener, PFN_on_event on_event);
+EGNAPI void events_register(u16 code, void *listener, PFN_on_event on_event);
 
 /**
  * Unregister from listening for when events are sent with the provided code. If no matching
@@ -45,7 +45,7 @@ EGNAPI void event_register(u16 code, void *listener, PFN_on_event on_event);
  * @param on_event The callback function pointer to be unregistered.
  * @returns FALSE if the event is not registered.
  */
-EGNAPI b8 event_unregister(u16 code, PFN_on_event on_event);
+EGNAPI b8 events_unregister(u16 code, PFN_on_event on_event);
 
 /**
  * Fires an event to listeners of the given code. If an event handler returns
@@ -55,7 +55,7 @@ EGNAPI b8 event_unregister(u16 code, PFN_on_event on_event);
  * @param data The event data.
  * @returns TRUE if a listener returns true.
  */
-EGNAPI b8 event_fire(u16 code, void *sender, EventContext data);
+EGNAPI b8 events_fire(u16 code, void *sender, EventContext data);
 
 // System internal event codes. Application should use codes beyond 255.
 typedef enum system_event_code

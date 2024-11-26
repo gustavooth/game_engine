@@ -5,7 +5,7 @@
             "name": "(Linux) Launch",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/game_test",
+            "program": "${workspaceFolder}/bin/game",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/app",

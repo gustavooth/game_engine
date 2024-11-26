@@ -2,8 +2,10 @@
 #include "core/logger.h"
 #include "core/memo.h"
 
-EGNAPI void linear_allocator_create(u64 size, LinearAllocator *out_allocator) {
-  if (!out_allocator){
+EGNAPI void linear_allocator_create(u64 size, LinearAllocator *out_allocator)
+{
+  if (!out_allocator)
+  {
     EGNERROR("linear_allocator_create: out_allocator is null.")
     return;
   }
@@ -13,8 +15,10 @@ EGNAPI void linear_allocator_create(u64 size, LinearAllocator *out_allocator) {
   out_allocator->allocated = 0;
 }
 
-EGNAPI void linear_allocator_destroy(LinearAllocator *allocator) {
-  if (!allocator){
+EGNAPI void linear_allocator_destroy(LinearAllocator *allocator)
+{
+  if (!allocator)
+  {
     EGNERROR("linear_allocator_destroy: allocator is null.");
     return;
   }
@@ -23,7 +27,8 @@ EGNAPI void linear_allocator_destroy(LinearAllocator *allocator) {
   MEMOZERO(allocator, sizeof(LinearAllocator));
 }
 
-EGNAPI void* linear_allocator_allocate(LinearAllocator *allocator, u64 size) {
+EGNAPI void *linear_allocator_allocate(LinearAllocator *allocator, u64 size)
+{
   u64 remaining = allocator->total_size - allocator->allocated;
 
   if (remaining < size)
@@ -32,15 +37,17 @@ EGNAPI void* linear_allocator_allocate(LinearAllocator *allocator, u64 size) {
     return 0;
   }
 
-  void* block = allocator->memory + allocator->allocated;
+  void *block = allocator->memory + allocator->allocated;
 
   allocator->allocated += size;
 
   return block;
 }
 
-EGNAPI void linear_allocator_free_all(LinearAllocator *allocator) {
-  if (!allocator){
+EGNAPI void linear_allocator_free_all(LinearAllocator *allocator)
+{
+  if (!allocator)
+  {
     EGNERROR("linear_allocator_free_all: allocator is null.");
     return;
   }

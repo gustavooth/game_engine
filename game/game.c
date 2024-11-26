@@ -10,7 +10,9 @@ int main(int cnt, char **args)
     .window_pos_y = 100,
   };
 
-  engine_initialize(&settings);
+  void* engine_instance;
+  
+  engine_create_instance(&settings, &engine_instance);
   
   return 0;
 }

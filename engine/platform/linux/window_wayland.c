@@ -6,6 +6,7 @@
 #include "platform/window.h"
 #include "core/logger.h"
 #include "core/events.h"
+#include "core/memo.h"
 
 #include <wayland-client.h>
 #include <stdlib.h>
@@ -44,8 +45,8 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 
 b8 window_create(const char *window_name, u32 pos_x, u32 pos_y, u32 width, u32 height, Window *out_window)
 {
-  WaylandState *state = malloc(sizeof(WaylandState));
-  memset(state, 0, sizeof(WaylandState));
+  WaylandState *state = MEMOALLOC(sizeof(WaylandState), MEMO_WINDOW);
+  MEMOSET(state, 0, sizeof(WaylandState));
   out_window->internal_state = state;
 
   state->display = wl_display_connect(NULL);
@@ -76,7 +77,7 @@ b8 window_create(const char *window_name, u32 pos_x, u32 pos_y, u32 width, u32 h
 
   wl_surface_commit(state->surface);
 
-  EGNINFO("Wayland state initialized!");
+  EGNINFO("Core Platform Wayland initialized!");
 
   return true;
 }
@@ -147,13 +148,13 @@ static void xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel
   EventContext ctx = {0};
   ctx.data.u16[0] = width;
   ctx.data.u16[1] = height;
-  event_fire(EVENT_CODE_RESIZED, state, ctx);
+  events_fire(EVENT_CODE_RESIZED, state, ctx);
 }
 
 void xgd_toplevel_close(void *data, struct xdg_toplevel *xdg_toplevel)
 {
   EventContext ctx = {0};
-  event_fire(EVENT_CODE_APPLICATION_QUIT, data, ctx);
+  events_fire(EVENT_CODE_APPLICATION_QUIT, data, ctx);
 }
 
 void configure_bounds(void *data, struct xdg_toplevel *xdg_toplevel, i32 width, i32 height) {}

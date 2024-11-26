@@ -11,5 +11,5 @@ typedef struct EngineSettings
   i32 window_pos_y;
 } EngineSettings;
 
-EGNAPI b8 engine_initialize(EngineSettings *settings);
-EGNAPI void engine_shutdown();
+EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_ptr);
+EGNAPI void engine_destroy_instance(void *instance_ptr);

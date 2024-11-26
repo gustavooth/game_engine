@@ -2,75 +2,85 @@
 #include "logger.h"
 #include "containers/egnarray.h"
 
-typedef struct registered_listener
+typedef struct RegisteredListener
 {
   void *linstener;
   PFN_on_event callback;
-} registered_listener;
+} RegisteredListener;
 
-typedef struct registered_event
+typedef struct RegisteredEvent
 {
-  registered_listener *listeners;
-} registered_event;
+  RegisteredListener *listeners;
+} RegisteredEvent;
 
 #define MAX_EVENT_CODE 4096
 
-typedef struct events_state
+typedef struct EventsState
 {
-  registered_event events[MAX_EVENT_CODE];
-} events_state;
+  RegisteredEvent events[MAX_EVENT_CODE];
+} EventsState;
 
-static events_state state;
+static EventsState *state_ptr;
 
-b8 event_initialize()
+b8 events_initialize(u64 *out_memory_requirement, void *state)
 {
-  EGNINFO("Events system initialized!");
+  if (!state)
+  {
+    *out_memory_requirement = sizeof(EventsState);
+    return false;
+  }
+
+  state_ptr = (EventsState *)state;
+
+  EGNINFO("Core Events initialized!");
   return true;
 }
 
-void event_shutdown()
+void events_shutdown()
 {
   for (u16 i = 0; i < MAX_EVENT_CODE; i++)
   {
-    if (state.events[i].listeners != 0)
+    if (state_ptr->events[i].listeners != 0)
     {
-      egnarray_destroy(state.events[i].listeners);
+      egnarray_destroy(state_ptr->events[i].listeners);
     }
   }
+
+  state_ptr = 0;
 }
 
-void event_register(u16 code, void *listener, PFN_on_event on_event)
+void events_register(u16 code, void *listener, PFN_on_event on_event)
 {
-  if (state.events[code].listeners == 0)
+  if (state_ptr->events[code].listeners == 0)
   {
-    state.events[code].listeners = EGNARRAY(registered_listener);
+    state_ptr->events[code].listeners = EGNARRAY(RegisteredListener);
   }
 
-  registered_listener lis = {listener, on_event};
-  egnarray_push(state.events[code].listeners, &lis);
+  RegisteredListener lis = {listener, on_event};
+  egnarray_push(state_ptr->events[code].listeners, &lis);
 }
 
-b8 event_unregister(u16 code, PFN_on_event on_event)
+b8 events_unregister(u16 code, PFN_on_event on_event)
 {
-  for (u16 i = 0; i < egnarray_len(state.events[code].listeners); i++)
+  for (u16 i = 0; i < egnarray_len(state_ptr->events[code].listeners); i++)
   {
-    if (state.events[code].listeners[i].callback == on_event)
+    if (state_ptr->events[code].listeners[i].callback == on_event)
     {
-      egnarray_pop_at(state.events[code].listeners, i);
+      egnarray_pop_at(state_ptr->events[code].listeners, i);
       return true;
     }
   }
   return false;
 }
 
-b8 event_fire(u16 code, void *sender, EventContext data)
+b8 events_fire(u16 code, void *sender, EventContext data)
 {
-  if (state.events[code].listeners == 0)
+  if (state_ptr->events[code].listeners == 0)
     return false;
 
-  for (u16 i = 0; i < egnarray_len(state.events[code].listeners); i++)
+  for (u16 i = 0; i < egnarray_len(state_ptr->events[code].listeners); i++)
   {
-    if (state.events[code].listeners[i].callback(code, sender, data))
+    if (state_ptr->events[code].listeners[i].callback(code, sender, data))
     {
       return true;
     }

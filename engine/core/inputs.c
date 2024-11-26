@@ -3,165 +3,174 @@
 #include "events.h"
 #include "memo.h"
 
-typedef struct keyboard_state
+typedef struct KeyboardState
 {
   b8 keys[256];
-} keyboard_state;
+} KeyboardState;
 
-typedef struct mouse_state
+typedef struct MouseState
 {
   i16 x;
   i16 y;
   i8 wheel;
   u8 buttons[BUTTON_MAX_BUTTONS];
-} mouse_state;
+} MouseState;
 
-typedef struct input_state
+typedef struct InputState
 {
-  keyboard_state current_keyboard;
-  keyboard_state previous_keyboard;
-  mouse_state current_mouse;
-  mouse_state previous_mouse;
-} input_state;
+  KeyboardState current_keyboard;
+  KeyboardState previous_keyboard;
+  MouseState current_mouse;
+  MouseState previous_mouse;
+} InputState;
 
-static input_state state;
+static InputState* state_ptr;
 
-b8 input_initialize()
+b8 inputs_initialize(u64* out_memory_requirement, void* state)
 {
-  EGNINFO("Inputs system initialized!");
+  if (!state)
+  {
+    *out_memory_requirement = sizeof(InputState);
+    return false;
+  }
+
+  state_ptr = (InputState *)state;
+
+  EGNINFO("Core Inputs initialized!");
   return true;
 }
 
-void input_shutdown()
+void inputs_shutdown()
 {
+  state_ptr = 0;
 }
 
-void input_update(f64 delta_time)
+void inputs_update(f64 delta_time)
 {
-  MEMOCPY(&state.previous_keyboard, &state.current_keyboard, sizeof(keyboard_state));
-  MEMOCPY(&state.previous_mouse, &state.current_mouse, sizeof(mouse_state));
+  MEMOCPY(&state_ptr->previous_keyboard, &state_ptr->current_keyboard, sizeof(KeyboardState));
+  MEMOCPY(&state_ptr->previous_mouse, &state_ptr->current_mouse, sizeof(MouseState));
 }
 
-void input_process_key(keys key, b8 pressed)
+void inputs_process_key(keys key, b8 pressed)
 {
   // The check prevents the event from being triggered multiple times in the same frame.
-  if (state.current_keyboard.keys[key] != pressed)
+  if (state_ptr->current_keyboard.keys[key] != pressed)
   {
-    // Update internal state.
-    state.current_keyboard.keys[key] = pressed;
+    // Update internal state_ptr->
+    state_ptr->current_keyboard.keys[key] = pressed;
 
     // Fire the event.
     EventContext context;
     context.data.u16[0] = key;
-    event_fire(pressed ? EVENT_CODE_KEY_PRESSED : EVENT_CODE_KEY_RELEASED, 0, context);
+    events_fire(pressed ? EVENT_CODE_KEY_PRESSED : EVENT_CODE_KEY_RELEASED, 0, context);
   }
 }
 
-void input_process_button(Buttons button, b8 pressed)
+void inputs_process_button(Buttons button, b8 pressed)
 {
   // The check prevents the event from being triggered multiple times in the same frame.
-  if (state.current_mouse.buttons[button] != pressed)
+  if (state_ptr->current_mouse.buttons[button] != pressed)
   {
-    // Update internal state.
-    state.previous_mouse.buttons[button] = pressed;
+    // Update internal state_ptr->
+    state_ptr->previous_mouse.buttons[button] = pressed;
 
     // Fire the event.
     EventContext context;
     context.data.u16[0] = button;
-    event_fire(pressed ? EVENT_CODE_BUTTON_PRESSED : EVENT_CODE_BUTTON_RELEASED, 0, context);
+    events_fire(pressed ? EVENT_CODE_BUTTON_PRESSED : EVENT_CODE_BUTTON_RELEASED, 0, context);
   }
 }
 
-void input_process_mouse_move(i16 x, i16 y)
+void inputs_process_mouse_move(i16 x, i16 y)
 {
   // The check prevents the event from being triggered multiple times in the same frame.
-  if (state.current_mouse.x != x || state.current_mouse.y != y)
+  if (state_ptr->current_mouse.x != x || state_ptr->current_mouse.y != y)
   {
-    // Update internal state.
-    state.current_mouse.x = x;
-    state.current_mouse.y = y;
+    // Update internal state_ptr->
+    state_ptr->current_mouse.x = x;
+    state_ptr->current_mouse.y = y;
 
     // Fire the event.
     EventContext context;
     context.data.u16[0] = x;
     context.data.u16[1] = y;
-    event_fire(EVENT_CODE_MOUSE_MOVED, 0, context);
+    events_fire(EVENT_CODE_MOUSE_MOVED, 0, context);
   }
 }
 
-void input_process_mouse_wheel(i8 z_delta)
+void inputs_process_mouse_wheel(i8 z_delta)
 {
   // The check prevents the event from being triggered multiple times in the same frame.
-  if (state.current_mouse.wheel != z_delta)
+  if (state_ptr->current_mouse.wheel != z_delta)
   {
-    // Update internal state.
-    state.current_mouse.wheel = z_delta;
+    // Update internal state_ptr->
+    state_ptr->current_mouse.wheel = z_delta;
 
     // Fire the event.
     EventContext context;
     context.data.u8[0] = z_delta;
-    event_fire(EVENT_CODE_MOUSE_WHEEL, 0, context);
+    events_fire(EVENT_CODE_MOUSE_WHEEL, 0, context);
   }
 }
 
-b8 input_key_down(keys key)
+b8 inputs_key_down(keys key)
 {
-  return state.current_keyboard.keys[key] == true;
+  return state_ptr->current_keyboard.keys[key] == true;
 }
 
-b8 input_key_up(keys key)
+b8 inputs_key_up(keys key)
 {
-  return state.current_keyboard.keys[key] == false;
+  return state_ptr->current_keyboard.keys[key] == false;
 }
 
-b8 input_was_key_down(keys key)
+b8 inputs_was_key_down(keys key)
 {
-  return state.previous_keyboard.keys[key] == true;
+  return state_ptr->previous_keyboard.keys[key] == true;
 }
 
-b8 input_was_key_up(keys key)
+b8 inputs_was_key_up(keys key)
 {
-  return state.previous_keyboard.keys[key] == false;
+  return state_ptr->previous_keyboard.keys[key] == false;
 }
 
-b8 input_btn_down(Buttons button)
+b8 inputs_btn_down(Buttons button)
 {
-  return state.current_mouse.buttons[button] == true;
+  return state_ptr->current_mouse.buttons[button] == true;
 }
 
-b8 input_btn_up(Buttons button)
+b8 inputs_btn_up(Buttons button)
 {
-  return state.current_mouse.buttons[button] == false;
+  return state_ptr->current_mouse.buttons[button] == false;
 }
 
-b8 input_was_button_down(Buttons button)
+b8 inputs_was_button_down(Buttons button)
 {
-  return state.previous_mouse.buttons[button] == true;
+  return state_ptr->previous_mouse.buttons[button] == true;
 }
 
-b8 input_was_button_up(Buttons button)
+b8 inputs_was_button_up(Buttons button)
 {
-  return state.previous_mouse.buttons[button] == false;
+  return state_ptr->previous_mouse.buttons[button] == false;
 }
 
-i16 input_mouse_wheel()
+i16 inputs_mouse_wheel()
 {
-  return state.current_mouse.wheel;
+  return state_ptr->current_mouse.wheel;
 }
 
-i16 input_prev_mouse_wheel()
+i16 inputs_prev_mouse_wheel()
 {
-  return state.previous_mouse.wheel;
+  return state_ptr->previous_mouse.wheel;
 }
 
-void input_get_mouse_position(i32 *x, i32 *y)
+void inputs_get_mouse_position(i32 *x, i32 *y)
 {
-  *x = state.current_mouse.x;
-  *y = state.current_mouse.y;
+  *x = state_ptr->current_mouse.x;
+  *y = state_ptr->current_mouse.y;
 }
 
-void input_get_previous_mouse_position(i32 *x, i32 *y)
+void inputs_get_previous_mouse_position(i32 *x, i32 *y)
 {
-  *x = state.previous_mouse.x;
-  *y = state.previous_mouse.y;
+  *x = state_ptr->previous_mouse.x;
+  *y = state_ptr->previous_mouse.y;
 }

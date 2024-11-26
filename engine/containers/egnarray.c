@@ -1,12 +1,11 @@
 #include "egnarray.h"
 #include "core/logger.h"
-#include <stdlib.h>
-#include <string.h>
+#include "core/memo.h"
 
 egnarray _egnarray_create(u32 capacity, u32 stride)
 {
   u32 total_size = (EGNARRAY_FIELD_LENGTH * sizeof(u32)) + (capacity * stride);
-  u32 *header = malloc(total_size);
+  u32 *header = MEMOALLOC(total_size, MEMO_EGNARRAY);
   header[EGNARRAY_CAPACITY] = capacity;
   header[EGNARRAY_LENGTH] = 0;
   header[EGNARRAY_STRIDE] = stride;
@@ -16,7 +15,7 @@ egnarray _egnarray_create(u32 capacity, u32 stride)
 void egnarray_destroy(egnarray arr)
 {
   u32 *header = (u32 *)arr - EGNARRAY_FIELD_LENGTH;
-  free(header);
+  MEMOFREE(header);
 }
 
 u32 _egnarray_field_get(egnarray arr, u32 field)
@@ -38,7 +37,7 @@ egnarray _egnarray_extend(egnarray arr, u32 new_capacity)
   egnarray new_arr = _egnarray_create(new_capacity, header[EGNARRAY_STRIDE]);
   u32 *new_header = (u32 *)new_arr - EGNARRAY_FIELD_LENGTH;
 
-  memcpy(new_arr, arr, header[EGNARRAY_LENGTH] * header[EGNARRAY_STRIDE]);
+  MEMOCPY(new_arr, arr, header[EGNARRAY_LENGTH] * header[EGNARRAY_STRIDE]);
   new_header[EGNARRAY_LENGTH] = header[EGNARRAY_LENGTH];
 
   egnarray_destroy(arr);
@@ -56,7 +55,7 @@ egnarray _egnarray_push(egnarray arr, void *value_ptr)
     header = (u32 *)arr - EGNARRAY_FIELD_LENGTH;
   }
 
-  memcpy((void *)((u64)arr + header[EGNARRAY_STRIDE] * header[EGNARRAY_LENGTH]), value_ptr, header[EGNARRAY_STRIDE]);
+  MEMOCPY((void *)((u64)arr + header[EGNARRAY_STRIDE] * header[EGNARRAY_LENGTH]), value_ptr, header[EGNARRAY_STRIDE]);
   header[EGNARRAY_LENGTH] += 1;
 
   return arr;
@@ -65,7 +64,7 @@ egnarray _egnarray_push(egnarray arr, void *value_ptr)
 void egnarray_pop(egnarray arr)
 {
   u32 *header = (u32 *)arr - EGNARRAY_FIELD_LENGTH;
-  memset((void *)((u64)arr + header[EGNARRAY_STRIDE] * (header[EGNARRAY_LENGTH] - 1)), 0, header[EGNARRAY_STRIDE]);
+  MEMOSET((void *)((u64)arr + header[EGNARRAY_STRIDE] * (header[EGNARRAY_LENGTH] - 1)), 0, header[EGNARRAY_STRIDE]);
   header[EGNARRAY_LENGTH] -= 1;
 }
 
@@ -76,10 +75,10 @@ void egnarray_pop_at(egnarray arr, u32 index)
   u64 addr = (u64)arr + (header[EGNARRAY_STRIDE] * (index + 1));
   u32 size = (header[EGNARRAY_LENGTH] - (index + 1)) * header[EGNARRAY_STRIDE];
 
-  void *buffer = malloc(size);
-  memcpy(buffer, (void *)addr, size);
-  memcpy((void *)(addr - header[EGNARRAY_STRIDE]), buffer, size);
-  free(buffer);
+  void *buffer = MEMOALLOC(size, MEMO_EGNARRAY);
+  MEMOCPY(buffer, (void *)addr, size);
+  MEMOCPY((void *)(addr - header[EGNARRAY_STRIDE]), buffer, size);
+  MEMOFREE(buffer);
 
   header[EGNARRAY_LENGTH] -= 1;
 }

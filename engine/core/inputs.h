@@ -144,29 +144,29 @@ typedef enum keys
   KEY_MAX_KEYS
 } keys;
 
-b8 input_initialize();
-void input_shutdown();
-void input_update(f64 delta_time);
+b8 inputs_initialize(u64 *out_memory_requirement, void *state);
+void inputs_shutdown();
+void inputs_update(f64 delta_time);
 
 // keyboard input
-EGNAPI b8 input_key_down(keys key);
-EGNAPI b8 input_key_up(keys key);
-EGNAPI b8 input_was_key_down(keys key);
-EGNAPI b8 input_was_key_up(keys key);
+EGNAPI b8 inputs_key_down(keys key);
+EGNAPI b8 inputs_key_up(keys key);
+EGNAPI b8 inputs_was_key_down(keys key);
+EGNAPI b8 inputs_was_key_up(keys key);
 
-void input_process_key(keys key, b8 pressed);
+void inputs_process_key(keys key, b8 pressed);
 
 // mouse input
-EGNAPI b8 input_btn_down(Buttons button);
-EGNAPI b8 input_btn_up(Buttons button);
-EGNAPI b8 input_was_btn_down(Buttons button);
-EGNAPI b8 input_was_btn_up(Buttons button);
+EGNAPI b8 inputs_btn_down(Buttons button);
+EGNAPI b8 inputs_btn_up(Buttons button);
+EGNAPI b8 inputs_was_btn_down(Buttons button);
+EGNAPI b8 inputs_was_btn_up(Buttons button);
 
-EGNAPI void input_get_mouse_pos(i32 *x, i32 *y);
-EGNAPI void input_get_prev_mouse_pos(i32 *x, i32 *y);
-EGNAPI i16 input_mouse_wheel();
-EGNAPI i16 input_prev_mouse_wheel();
+EGNAPI void inputs_get_mouse_pos(i32 *x, i32 *y);
+EGNAPI void inputs_get_prev_mouse_pos(i32 *x, i32 *y);
+EGNAPI i16 inputs_mouse_wheel();
+EGNAPI i16 inputs_prev_mouse_wheel();
 
-void input_process_button(Buttons button, b8 pressed);
-void input_process_mouse_move(i16 x, i16 y);
-void input_process_mouse_wheel(i8 z_delta);
+void inputs_process_button(Buttons button, b8 pressed);
+void inputs_process_mouse_move(i16 x, i16 y);
+void inputs_process_mouse_wheel(i8 z_delta);
