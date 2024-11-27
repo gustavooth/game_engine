@@ -13,6 +13,8 @@
 
 #include <stdio.h>
 
+#include "platform/filemanager.h"
+
 typedef struct EngineState
 {
   LinearAllocator linear_allocator;
@@ -27,7 +29,7 @@ typedef struct EngineState
   Clock clock;
   b8 running;
 
-  char* memory_usage_str;
+  char *memory_usage_str;
 } EngineState;
 
 static EngineState *engine_ptr;
@@ -60,7 +62,7 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
 
   platform_initialize(&required_memory, 0);
   instance->platform_state = LIALLOC(&instance->linear_allocator, required_memory);
-  if (! platform_initialize(0, instance->platform_state))
+  if (!platform_initialize(0, instance->platform_state))
   {
     EGNERROR("engine_create_instance: failed to initialize platform state");
     return false;
@@ -69,7 +71,7 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
 
   logger_initialize(&required_memory, 0);
   instance->logger_state = LIALLOC(&instance->linear_allocator, required_memory);
-  if(!logger_initialize(0, instance->logger_state))
+  if (!logger_initialize(0, instance->logger_state))
   {
     EGNERROR("engine_create_instance: failed to initialize logger state");
     return false;
@@ -77,7 +79,7 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
 
   memo_initialize(&required_memory, 0);
   instance->memo_state = LIALLOC(&instance->linear_allocator, required_memory);
-  if(!memo_initialize(0, instance->memo_state))
+  if (!memo_initialize(0, instance->memo_state))
   {
     EGNERROR("engine_create_instance: failed to initialize memo state");
     return false;
@@ -89,7 +91,7 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
 
   events_initialize(&required_memory, 0);
   instance->events_state = LIALLOC(&instance->linear_allocator, required_memory);
-  if(!events_initialize(0, instance->events_state))
+  if (!events_initialize(0, instance->events_state))
   {
     EGNERROR("engine_create_instance: failed to initialize events state");
     return false;
@@ -97,15 +99,15 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
 
   inputs_initialize(&required_memory, 0);
   instance->inputs_state = LIALLOC(&instance->linear_allocator, required_memory);
-  if(!inputs_initialize(0, instance->inputs_state))
+  if (!inputs_initialize(0, instance->inputs_state))
   {
     EGNERROR("engine_create_instance: failed to initialize inputs state");
     return false;
   }
 
-  if(!window_create(settings->window_name,
-                     settings->window_pos_x, settings->window_pos_y, settings->window_width, 
-                     settings->window_height, &engine_ptr->window)) 
+  if (!window_create(settings->window_name,
+                     settings->window_pos_x, settings->window_pos_y, settings->window_width,
+                     settings->window_height, &engine_ptr->window))
   {
     EGNERROR("engine_create_instance: failed to initialize window state");
     return false;
@@ -113,7 +115,8 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
 
   window_show(&engine_ptr->window);
 
-  if (!renderer_initialize(&engine_ptr->window, settings->window_width, settings->window_height)) {
+  if (!renderer_initialize(&engine_ptr->window, settings->window_width, settings->window_height))
+  {
     EGNERROR("engine_create_instance: failed to initialize renderer state");
     return false;
   }

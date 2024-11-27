@@ -45,17 +45,17 @@ char *string_format(const char *format, ...)
   return new_str;
 }
 
-b8 string_format2(char *str, u64 str_len, u32 *out_required_chars, const char *format, ...)
+b8 string_format2(char *dest, u64 dest_len, u32 *out_required_chars, const char *format, ...)
 {
   va_list arg_ptr;
   va_start(arg_ptr, format);
-  i32 count = vsnprintf(str, str_len, format, arg_ptr);
+  i32 count = vsnprintf(dest, dest_len, format, arg_ptr);
   va_end(arg_ptr);
 
   if (count < 0)
     return false;
 
-  if (count >= (i32)str_len)
+  if (count >= (i32)dest_len)
   {
     if (out_required_chars)
       *out_required_chars = (u32)count + 1; // +1 for including the null character
