@@ -96,13 +96,13 @@ u64 filemanager_get_file_length(FileHandle *handle)
   return (u64)ftell(handle->handle);
 }
 
-u64 filemanager_read(FileHandle *handle, char *dest, u64 start, u64 end)
+u64 filemanager_read(FileHandle *handle, u8 *dest, u64 start, u64 end)
 {
   fseek(handle->handle, start, SEEK_SET);
   return fread(dest, 1, end, handle->handle);
 }
 
-b8 filemanager_read_all(const char *path, char **out_buffer_ptr, u64 *out_length)
+b8 filemanager_read_all(const char *path, u8 **out_buffer_ptr, u64 *out_length)
 {
   FILE *file = fopen(path, "r+b");
   if (file == 0)
@@ -110,7 +110,7 @@ b8 filemanager_read_all(const char *path, char **out_buffer_ptr, u64 *out_length
 
   fseek(file, 0, SEEK_END);
   u64 len = (u64)ftell(file);
-  char *buffer = MEMOALLOC(len, MEMO_STRING);
+  u8 *buffer = MEMOALLOC(len, MEMO_UNKNOWN);
 
   fseek(file, 0, SEEK_SET);
   u64 bytes_read = fread(buffer, 1, len, file);
@@ -128,10 +128,10 @@ b8 filemanager_read_all(const char *path, char **out_buffer_ptr, u64 *out_length
   return true;
 }
 
-u64 filemanager_write(FileHandle *handle, char *buffer, u64 lenght, u64 start)
+u64 filemanager_write(FileHandle *handle, u8 *buffer, u64 lenght, u64 start)
 {
   fseek(handle->handle, start, SEEK_SET);
-  return fwrite(buffer, sizeof(unsigned char), lenght, handle->handle);
+  return fwrite(buffer, 1, lenght, handle->handle);
 }
 
 b8 filemanager_delete_file(const char *path)

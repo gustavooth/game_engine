@@ -8,6 +8,7 @@
 #include "vkrenderer_framebuffer.h"
 #include "vkrenderer_fence.h"
 #include "vkrenderer_utils.h"
+#include "shader/vkrenderer_shader.h"
 #include "core/logger.h"
 #include "core/memo.h"
 #include "platform/window.h"
@@ -57,6 +58,9 @@ b8 renderer_initialize(Window *win, u32 width, u32 height)
   create_framebuffers();
   create_command_buffers();
   create_sync_objects();
+
+  if(!vkrenderer_shader_create(&ctx, &ctx.object_shader))
+    return false;
 
   EGNINFO("VKRENDERER Initialized!");
 

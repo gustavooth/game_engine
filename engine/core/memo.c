@@ -50,7 +50,7 @@ void *memo_allocate(u64 size, MemoTag tag)
 {
 #if LOG_WARN_ENABLED == 1
   if (tag == MEMO_UNKNOWN)
-    EGNWARN("memo_allocate called using memo_TAG_UNKNOWN.");
+    EGNWARN("memo_allocate called using MEMO_TAG_UNKNOWN.");
 #endif
 
   if (state_ptr)
@@ -72,7 +72,7 @@ void memo_free(void *block)
 
 #if LOG_WARN_ENABLED == 1
   if (data->tag == MEMO_UNKNOWN)
-    EGNWARN("memo_free called using memo_TAG_UNKNOWN.");
+    EGNWARN("memo_free called using MEMO_TAG_UNKNOWN.");
 #endif
 
   if (state_ptr)

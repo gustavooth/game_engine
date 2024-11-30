@@ -77,7 +77,7 @@ EGNAPI u64 filemanager_get_file_length(FileHandle *handle);
  * @param end Final cursor position
  * @return Return true if there is not error
  */
-EGNAPI u64 filemanager_read(FileHandle *handle, char *dest, u64 start, u64 end);
+EGNAPI u64 filemanager_read(FileHandle *handle, u8 *dest, u64 start, u64 end);
 
 /**
  * @brief Get all bytes from file
@@ -89,7 +89,7 @@ EGNAPI u64 filemanager_read(FileHandle *handle, char *dest, u64 start, u64 end);
  * @param out_length Out buffer length
  * @return Return true if success
  */
-EGNAPI b8 filemanager_read_all(const char *path, char **out_buffer_ptr, u64 *out_length);
+EGNAPI b8 filemanager_read_all(const char *path, u8 **out_buffer_ptr, u64 *out_length);
 
 /**
  * @brief Write bytes from file
@@ -100,7 +100,7 @@ EGNAPI b8 filemanager_read_all(const char *path, char **out_buffer_ptr, u64 *out
  * @param start Initial cursor position to write
  * @return Return bytes read
  */
-EGNAPI u64 filemanager_write(FileHandle *handle, char *buffer, u64 length, u64 start);
+EGNAPI u64 filemanager_write(FileHandle *handle, u8 *buffer, u64 length, u64 start);
 
 EGNAPI b8 filemanager_delete_file(const char* path);
 

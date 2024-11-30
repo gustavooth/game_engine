@@ -1,16 +1,13 @@
 #pragma once
 
-#include "defines.h"
 #include "core/asserts.h"
+#include "defines.h"
 #include <vulkan/vulkan.h>
 
-#define VKCHECK(expr)              \
-  {                                \
-    EGNASSERT(expr == VK_SUCCESS); \
-  }
+#define VKCHECK(expr)                                                          \
+  { EGNASSERT(expr == VK_SUCCESS); }
 
-typedef struct VkRendererQueueIndexes
-{
+typedef struct VkRendererQueueIndexes {
   u32 graphics_family_index; // queue family index
   u32 graphics_index;        // queue index in family
 
@@ -31,8 +28,7 @@ typedef struct VkRendererQueueIndexes
   u32 *queue_count;          // EGNARRAY
 } VkRendererQueueIndexes;
 
-typedef struct VkRendererSwapchainSupport
-{
+typedef struct VkRendererSwapchainSupport {
   VkSurfaceCapabilitiesKHR capabilities;
   u32 format_count;
   VkSurfaceFormatKHR *formats;
@@ -40,8 +36,7 @@ typedef struct VkRendererSwapchainSupport
   VkPresentModeKHR *present_modes;
 } VkRendererSwapchainSupport;
 
-typedef struct VkRendererDevice
-{
+typedef struct VkRendererDevice {
   VkPhysicalDevice physical;
   VkDevice handle;
 
@@ -59,8 +54,7 @@ typedef struct VkRendererDevice
   VkRendererSwapchainSupport swapchain_support;
 } VkRendererDevice;
 
-typedef struct VkRendererImage
-{
+typedef struct VkRendererImage {
   VkImage handle;
   VkDeviceMemory memory;
   VkImageView view;
@@ -68,8 +62,7 @@ typedef struct VkRendererImage
   u32 height;
 } VkRendererImage;
 
-typedef struct VkRendererSwapchain
-{
+typedef struct VkRendererSwapchain {
   VkSwapchainKHR handle;
 
   u32 image_count;
@@ -82,8 +75,7 @@ typedef struct VkRendererSwapchain
 
 } VkRendererSwapchain;
 
-typedef enum VkRendererState
-{
+typedef enum VkRendererState {
   VKRENDERER_STATE_NOT_ALLOCATED,
   VKRENDERER_STATE_READY,
   VKRENDERER_STATE_RECORDING,
@@ -92,8 +84,7 @@ typedef enum VkRendererState
   VKRENDERER_STATE_SUBMITTED
 } VkRendererState;
 
-typedef struct VkRendererRenderpass
-{
+typedef struct VkRendererRenderpass {
   VkRenderPass handle;
 
   f32 x, y, w, h;
@@ -104,15 +95,13 @@ typedef struct VkRendererRenderpass
   VkRendererState state;
 } VkRendererRenderpass;
 
-typedef struct VkRendererCommandBuffer
-{
+typedef struct VkRendererCommandBuffer {
   VkCommandBuffer handle;
 
   VkRendererState state;
 } VkRendererCommandBuffer;
 
-typedef struct VkRendererFramebuffer
-{
+typedef struct VkRendererFramebuffer {
   VkFramebuffer handle;
 
   u32 attachment_count;
@@ -120,14 +109,30 @@ typedef struct VkRendererFramebuffer
   VkRendererRenderpass *renderpass;
 } VkRendererFramebuffer;
 
-typedef struct VkRendererFence
-{
+typedef struct VkRendererFence {
   VkFence handle;
   b8 is_signaled;
 } VkRendererFence;
 
-typedef struct VkContext
-{
+typedef struct VkRendererShaderStage {
+  VkShaderModule handle;
+  VkShaderModuleCreateInfo module_info;
+  VkPipelineShaderStageCreateInfo pipeline_stage_info;
+} VkRendererShaderStage;
+
+typedef struct VkRendererPipeline {
+  VkPipeline handle;
+  VkPipelineLayout layout;
+} VkRendererPipeline;
+
+#define VKRENDERER_SHADER_STATGE_TYPE_COUNT 2
+
+typedef struct VkRendererShader {
+  VkRendererShaderStage stages[VKRENDERER_SHADER_STATGE_TYPE_COUNT];
+  VkRendererPipeline pipeline;
+} VkRendererShader;
+
+typedef struct VkContext {
   VkInstance instance;
   VkDebugUtilsMessengerEXT debug_messenger;
   VkAllocationCallbacks *allocator;
@@ -158,6 +163,8 @@ typedef struct VkContext
   VkRendererFence *in_flight_fences;
   // image count
   VkRendererFence **images_in_flight;
+
+  VkRendererShader object_shader;
 
   b8 (*find_memory_index)(u32 type_filter, u32 property_flags, u32 *out_index);
 } VkContext;

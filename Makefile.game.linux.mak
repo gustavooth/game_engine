@@ -7,8 +7,8 @@ EXE = $(NAME)
 
 SRC_DIR = $(NAME)
 ASSEMBLY_DIR = bin
-BUILD_DIR = build/$(NAME)
 CORE_BUILD_DIR = build
+BUILD_DIR = $(CORE_BUILD_DIR)/$(NAME)
 
 SRC = $(shell find $(SRC_DIR) -name '*.c')
 OBJ = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRC))
@@ -40,7 +40,7 @@ $(ASSEMBLY_DIR)/$(ENGINE_LIB):
 	make -f Makefile.engine.linux.mak
 
 run: build
-	./$(ASSEMBLY_DIR)/$(EXE)
+	cd $(ASSEMBLY_DIR) && ./$(EXE)
 
 clean:
 	$(info $(CORE_BUILD_DIR) $(ASSEMBLY_DIR))
