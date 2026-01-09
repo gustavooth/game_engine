@@ -5,7 +5,7 @@
           "includePath": [
               "/usr/include/*",
               "engine/",
-              "game_test/"
+              "game/"
           ],
           "defines": [
               "PLATFORM_WAYLAND"

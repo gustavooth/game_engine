@@ -349,6 +349,7 @@ b8 pick_physical_device(VkContext *ctx, VkPhysicalDevice *out_device, VkRenderer
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(devices[i], &properties);
     EGNINFO("VKRENDERER device selected %s", properties.deviceName);
+    break;
   }
 
   memo_free(requirements.device_extensions);

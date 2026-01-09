@@ -21,7 +21,7 @@ SPIRV = $(FRAG_SPIRV) $(VERT_SPIRV)
 
 C_FLAGS = -g -fPIC -MD -Wvarargs -Wall -Werror -Wno-missing-braces -Werror=vla
 INC_FLAGS = -I$(SRC_DIR) -I/usr/include
-LINK_FLAGS = -shared -lwayland-client -lvulkan
+LINK_FLAGS = -shared -lwayland-client -lvulkan -lm
 DEFINES = -DEGNEXPORT
 
 all: $(ASSEMBLY_DIR)/$(LIB)
