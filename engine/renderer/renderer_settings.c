@@ -30,7 +30,7 @@ static void set_atmosphere(RendererGraphicsSettings *settings, RendererQuality q
   else if (quality == RENDERER_QUALITY_ULTRA)
   {
     settings->atmosphere_mie = 0.003f;
-    settings->fog_density = 0.010f;
+    settings->fog_density = 0.006f;
   }
 }
 

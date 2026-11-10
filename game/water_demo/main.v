@@ -54,7 +54,7 @@ fn main() {
 	graphics.exposure_compensation = -0.5
 	graphics.saturation = 1.15
 	graphics.contrast = 1.08
-	graphics.fog_density = 0.02
+	graphics.fog_density = 0.005
 	mut app := egn.create(egn.Settings{
 		title:      'EGN - Water Map (Kenney CC0)'
 		width:      1600
