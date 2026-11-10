@@ -90,6 +90,18 @@ pub fn (e &Engine) load_texture(path string) !Texture {
 	}
 }
 
+// load_lut loads a .cube 3D LUT for color grading. The returned texture is
+// released with release_texture.
+pub fn (e &Engine) load_lut(path string) !Texture {
+	id := C.renderer_lut_load(path.str)
+	if id == 0 {
+		return error('failed to load LUT: ${path}')
+	}
+	return Texture{
+		id: id
+	}
+}
+
 // TextTexture is a rasterized UTF-8 string and its dimensions in pixels.
 pub struct TextTexture {
 pub:
@@ -117,6 +129,15 @@ pub fn (e &Engine) release_texture(texture Texture) {
 	if texture.id != 0 {
 		C.renderer_texture_release(texture.id)
 	}
+}
+
+// set_texture_repeat changes an already loaded texture to repeat wrapping.
+// Useful for tiling water or terrain materials.
+pub fn (e &Engine) set_texture_repeat(texture Texture, repeat bool) bool {
+	if texture.id == 0 {
+		return false
+	}
+	return C.renderer_texture_set_repeat(texture.id, repeat)
 }
 
 // release_mesh frees a mesh loaded with load_obj/load_glb. Renderer-owned

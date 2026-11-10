@@ -1,4 +1,5 @@
 #include "renderer/renderer.h"
+#include "renderer/renderer_settings.h"
 #include "vkrenderer_types.h"
 #include "vkrenderer_device.h"
 #include "vkrenderer_platform.h"
@@ -26,27 +27,89 @@
 #include <string.h>
 
 static VkContext ctx;
-static RendererGraphicsSettings graphics_settings = {true, RENDERER_QUALITY_MEDIUM};
 
-RendererGraphicsSettings renderer_graphics_settings_default(void)
-{
-  RendererGraphicsSettings settings = {true, RENDERER_QUALITY_MEDIUM};
-  return settings;
-}
+// The requested settings can change at any time. They are copied into the
+// active set by apply_graphics_settings() at the start of a frame, before any
+// command buffer is recorded, so a runtime batch is never observed halfway.
+static RendererGraphicsSettings graphics_settings;
+static RendererGraphicsSettings active_graphics_settings;
+static b8 graphics_settings_initialized;
+static b8 graphics_settings_dirty;
 
 b8 renderer_set_graphics_settings(const RendererGraphicsSettings *settings)
 {
-  if (!settings || settings->shadow_quality < RENDERER_QUALITY_LOW ||
-      settings->shadow_quality > RENDERER_QUALITY_HIGH)
+  if (!renderer_graphics_settings_valid(settings))
     return false;
+
   graphics_settings = *settings;
   graphics_settings.shadows_enabled = !!settings->shadows_enabled;
+  graphics_settings.hdr_enabled = !!settings->hdr_enabled;
+  graphics_settings.auto_exposure_enabled = !!settings->auto_exposure_enabled;
+  graphics_settings.tone_mapping_enabled = !!settings->tone_mapping_enabled;
+  graphics_settings.color_grading_enabled = !!settings->color_grading_enabled;
+  graphics_settings.bloom_enabled = !!settings->bloom_enabled;
+  graphics_settings.pbr_enabled = !!settings->pbr_enabled;
+  graphics_settings.ao_enabled = !!settings->ao_enabled;
+  graphics_settings.gi_enabled = !!settings->gi_enabled;
+  graphics_settings.atmosphere_enabled = !!settings->atmosphere_enabled;
+  graphics_settings.fog_enabled = !!settings->fog_enabled;
+  graphics_settings.lut_enabled = !!settings->lut_enabled;
+
+  if (!graphics_settings_initialized)
+  {
+    // Before the first frame there is nothing to recreate, so the requested
+    // batch is also the active one.
+    active_graphics_settings = graphics_settings;
+    graphics_settings_initialized = true;
+  }
+
+  graphics_settings_dirty = true;
   return true;
 }
 
 RendererGraphicsSettings renderer_get_graphics_settings(void)
 {
+  if (!graphics_settings_initialized)
+  {
+    graphics_settings = renderer_graphics_settings_default();
+    graphics_settings_initialized = true;
+  }
   return graphics_settings;
+}
+
+RendererGraphicsSettings renderer_get_active_graphics_settings(void)
+{
+  if (!graphics_settings_initialized)
+    return renderer_get_graphics_settings();
+  return active_graphics_settings;
+}
+
+static void apply_graphics_settings()
+{
+  if (!graphics_settings_initialized)
+  {
+    graphics_settings = renderer_graphics_settings_default();
+    active_graphics_settings = graphics_settings;
+    graphics_settings_initialized = true;
+    graphics_settings_dirty = false;
+    return;
+  }
+
+  if (!graphics_settings_dirty)
+    return;
+
+  if (renderer_graphics_settings_equal(&graphics_settings, &active_graphics_settings))
+  {
+    graphics_settings_dirty = false;
+    return;
+  }
+
+  // Stage hooks (HDR targets, CSM resources, post pipelines, ...) are added
+  // here as the corresponding features are initialized. Waiting once is
+  // cheaper than reconfiguring every subsystem at a different point in time.
+  vkDeviceWaitIdle(ctx.device.handle);
+  active_graphics_settings = graphics_settings;
+  graphics_settings_dirty = false;
 }
 
 VkContext *vkrenderer_get_context(void)
@@ -217,6 +280,15 @@ b8 renderer_initialize(Window *win, u32 width, u32 height, b8 vsync)
     return false;
   }
 
+  if (!graphics_settings_initialized)
+  {
+    if (!graphics_settings_dirty)
+      graphics_settings = renderer_graphics_settings_default();
+    active_graphics_settings = graphics_settings;
+    graphics_settings_initialized = true;
+    graphics_settings_dirty = false;
+  }
+
   EGNINFO("VKRENDERER Initialized!");
 
   return true;
@@ -287,6 +359,8 @@ void renderer_resize(u32 width, u32 height)
 
 b8 renderer_draw_frame(RenderPacket packet)
 {
+  apply_graphics_settings();
+
   if (!begin_frame())
     return false;
 
@@ -684,4 +758,10 @@ b8 handle_recreate_swapchain()
   
   ctx.recreating_swapchain = false;
   return true;
+}
+
+u32 renderer_lut_load(const char *path)
+{
+  (void)path;
+  return 0;
 }

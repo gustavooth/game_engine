@@ -152,6 +152,7 @@ typedef struct VkRendererTexture {
   VkDescriptorSet descriptor_set;
   u32 width;
   u32 height;
+  u32 mip_levels;
   b8 used;
 } VkRendererTexture;
 

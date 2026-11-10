@@ -31,32 +31,238 @@ pub mut:
 }
 
 pub enum GraphicsQuality {
-	low
-	medium
-	high
+	low    = 0
+	medium = 1
+	high   = 2
+	ultra  = 3
 }
 
+pub enum GraphicsPreset {
+	custom = 0
+	low    = 1
+	medium = 2
+	high   = 3
+	ultra  = 4
+}
+
+pub enum ToneMapper {
+	reinhard = 0
+	aces     = 1
+	agx      = 2
+}
+
+// GraphicsSettings mirrors RendererGraphicsSettings in C. The defaults are the
+// high preset; use graphics_preset(.ultra) to start from another preset and
+// override individual fields before applying.
 pub struct GraphicsSettings {
 pub mut:
-	shadows_enabled bool = true
-	shadow_quality GraphicsQuality = .medium
+	// Label only. Every field below is applied explicitly, so presets can be
+	// tweaked without changing this field.
+	preset                    GraphicsPreset = .high
+	hdr_enabled               bool           = true
+	tone_mapping_enabled      bool           = true
+	tone_mapper               ToneMapper     = .aces
+	exposure_compensation     f32
+	auto_exposure_enabled     bool           = true
+	auto_exposure_quality     GraphicsQuality = .high
+	auto_exposure_min_ev      f32            = -6.0
+	auto_exposure_max_ev      f32            = 6.0
+	auto_exposure_speed       f32            = 1.5
+	color_grading_enabled     bool           = true
+	contrast                  f32            = 1.0
+	saturation                f32            = 1.0
+	temperature               f32
+	tint                      f32
+	lift_r                    f32
+	lift_g                    f32
+	lift_b                    f32
+	gamma_r                   f32            = 1.0
+	gamma_g                   f32            = 1.0
+	gamma_b                   f32            = 1.0
+	gain_r                    f32            = 1.0
+	gain_g                    f32            = 1.0
+	gain_b                    f32            = 1.0
+	vignette                  f32            = 0.15
+	lut_enabled               bool
+	lut_strength              f32            = 1.0
+	lut_texture               u32
+	bloom_enabled             bool           = true
+	bloom_quality             GraphicsQuality = .high
+	bloom_threshold           f32            = 1.1
+	bloom_intensity           f32            = 0.055
+	bloom_radius              f32            = 0.55
+	shadows_enabled           bool           = true
+	shadow_quality            GraphicsQuality = .high
+	shadow_cascades           u32
+	shadow_distance           f32            = 120.0
+	shadow_softness           f32            = 1.0
+	pbr_enabled               bool           = true
+	ao_enabled                bool           = true
+	ao_quality                GraphicsQuality = .high
+	ao_radius                 f32            = 1.0
+	ao_intensity              f32            = 0.7
+	gi_enabled                bool           = true
+	gi_quality                GraphicsQuality = .high
+	gi_intensity              f32            = 0.55
+	gi_distance               f32            = 12.0
+	atmosphere_enabled        bool           = true
+	atmosphere_quality        GraphicsQuality = .high
+	atmosphere_rayleigh       f32            = 1.0
+	atmosphere_mie            f32            = 0.0035
+	atmosphere_turbidity      f32            = 2.4
+	atmosphere_mie_anisotropy f32            = 0.76
+	atmosphere_sun_intensity  f32            = 20.0
+	fog_enabled               bool           = true
+	fog_density               f32            = 0.008
+	fog_height_falloff        f32            = 0.12
 }
 
-// Applies all graphics options together. Returns false for an invalid quality.
-pub fn set_graphics_settings(settings GraphicsSettings) bool {
-	value := C.RendererGraphicsSettings{
-		shadows_enabled: settings.shadows_enabled
-		shadow_quality: int(settings.shadow_quality)
+fn graphics_settings_to_c(settings GraphicsSettings) C.RendererGraphicsSettings {
+	return C.RendererGraphicsSettings{
+		preset:                      int(settings.preset)
+		hdr_enabled:                 settings.hdr_enabled
+		tone_mapping_enabled:        settings.tone_mapping_enabled
+		tone_mapper:                 int(settings.tone_mapper)
+		exposure_compensation:       settings.exposure_compensation
+		auto_exposure_enabled:       settings.auto_exposure_enabled
+		auto_exposure_quality:       int(settings.auto_exposure_quality)
+		auto_exposure_min_ev:        settings.auto_exposure_min_ev
+		auto_exposure_max_ev:        settings.auto_exposure_max_ev
+		auto_exposure_speed:         settings.auto_exposure_speed
+		color_grading_enabled:       settings.color_grading_enabled
+		contrast:                    settings.contrast
+		saturation:                  settings.saturation
+		temperature:                 settings.temperature
+		tint:                        settings.tint
+		lift_r:                      settings.lift_r
+		lift_g:                      settings.lift_g
+		lift_b:                      settings.lift_b
+		gamma_r:                     settings.gamma_r
+		gamma_g:                     settings.gamma_g
+		gamma_b:                     settings.gamma_b
+		gain_r:                      settings.gain_r
+		gain_g:                      settings.gain_g
+		gain_b:                      settings.gain_b
+		vignette:                    settings.vignette
+		lut_enabled:                 settings.lut_enabled
+		lut_strength:                settings.lut_strength
+		lut_texture:                 settings.lut_texture
+		bloom_enabled:               settings.bloom_enabled
+		bloom_quality:               int(settings.bloom_quality)
+		bloom_threshold:             settings.bloom_threshold
+		bloom_intensity:             settings.bloom_intensity
+		bloom_radius:                settings.bloom_radius
+		shadows_enabled:             settings.shadows_enabled
+		shadow_quality:              int(settings.shadow_quality)
+		shadow_cascades:             settings.shadow_cascades
+		shadow_distance:             settings.shadow_distance
+		shadow_softness:             settings.shadow_softness
+		pbr_enabled:                 settings.pbr_enabled
+		ao_enabled:                  settings.ao_enabled
+		ao_quality:                  int(settings.ao_quality)
+		ao_radius:                   settings.ao_radius
+		ao_intensity:                settings.ao_intensity
+		gi_enabled:                  settings.gi_enabled
+		gi_quality:                  int(settings.gi_quality)
+		gi_intensity:                settings.gi_intensity
+		gi_distance:                 settings.gi_distance
+		atmosphere_enabled:          settings.atmosphere_enabled
+		atmosphere_quality:          int(settings.atmosphere_quality)
+		atmosphere_rayleigh:         settings.atmosphere_rayleigh
+		atmosphere_mie:              settings.atmosphere_mie
+		atmosphere_turbidity:        settings.atmosphere_turbidity
+		atmosphere_mie_anisotropy:   settings.atmosphere_mie_anisotropy
+		atmosphere_sun_intensity:    settings.atmosphere_sun_intensity
+		fog_enabled:                 settings.fog_enabled
+		fog_density:                 settings.fog_density
+		fog_height_falloff:          settings.fog_height_falloff
 	}
+}
+
+fn graphics_settings_from_c(value C.RendererGraphicsSettings) GraphicsSettings {
+	return GraphicsSettings{
+		preset:                      unsafe { GraphicsPreset(value.preset) }
+		hdr_enabled:                 value.hdr_enabled
+		tone_mapping_enabled:        value.tone_mapping_enabled
+		tone_mapper:                 unsafe { ToneMapper(value.tone_mapper) }
+		exposure_compensation:       value.exposure_compensation
+		auto_exposure_enabled:       value.auto_exposure_enabled
+		auto_exposure_quality:       unsafe { GraphicsQuality(value.auto_exposure_quality) }
+		auto_exposure_min_ev:        value.auto_exposure_min_ev
+		auto_exposure_max_ev:        value.auto_exposure_max_ev
+		auto_exposure_speed:         value.auto_exposure_speed
+		color_grading_enabled:       value.color_grading_enabled
+		contrast:                    value.contrast
+		saturation:                  value.saturation
+		temperature:                 value.temperature
+		tint:                        value.tint
+		lift_r:                      value.lift_r
+		lift_g:                      value.lift_g
+		lift_b:                      value.lift_b
+		gamma_r:                     value.gamma_r
+		gamma_g:                     value.gamma_g
+		gamma_b:                     value.gamma_b
+		gain_r:                      value.gain_r
+		gain_g:                      value.gain_g
+		gain_b:                      value.gain_b
+		vignette:                    value.vignette
+		lut_enabled:                 value.lut_enabled
+		lut_strength:                value.lut_strength
+		lut_texture:                 value.lut_texture
+		bloom_enabled:               value.bloom_enabled
+		bloom_quality:               unsafe { GraphicsQuality(value.bloom_quality) }
+		bloom_threshold:             value.bloom_threshold
+		bloom_intensity:             value.bloom_intensity
+		bloom_radius:                value.bloom_radius
+		shadows_enabled:             value.shadows_enabled
+		shadow_quality:              unsafe { GraphicsQuality(value.shadow_quality) }
+		shadow_cascades:             value.shadow_cascades
+		shadow_distance:             value.shadow_distance
+		shadow_softness:             value.shadow_softness
+		pbr_enabled:                 value.pbr_enabled
+		ao_enabled:                  value.ao_enabled
+		ao_quality:                  unsafe { GraphicsQuality(value.ao_quality) }
+		ao_radius:                   value.ao_radius
+		ao_intensity:                value.ao_intensity
+		gi_enabled:                  value.gi_enabled
+		gi_quality:                  unsafe { GraphicsQuality(value.gi_quality) }
+		gi_intensity:                value.gi_intensity
+		gi_distance:                 value.gi_distance
+		atmosphere_enabled:          value.atmosphere_enabled
+		atmosphere_quality:          unsafe { GraphicsQuality(value.atmosphere_quality) }
+		atmosphere_rayleigh:         value.atmosphere_rayleigh
+		atmosphere_mie:              value.atmosphere_mie
+		atmosphere_turbidity:        value.atmosphere_turbidity
+		atmosphere_mie_anisotropy:   value.atmosphere_mie_anisotropy
+		atmosphere_sun_intensity:    value.atmosphere_sun_intensity
+		fog_enabled:                 value.fog_enabled
+		fog_density:                 value.fog_density
+		fog_height_falloff:          value.fog_height_falloff
+	}
+}
+
+// graphics_preset returns a fully populated preset ready to be tweaked and
+// passed to set_graphics_settings or Settings.graphics.
+pub fn graphics_preset(preset GraphicsPreset) GraphicsSettings {
+	return graphics_settings_from_c(C.renderer_graphics_settings_preset(int(preset)))
+}
+
+// Applies all graphics options as one atomic batch on the next frame. Returns
+// false when any quality/range is invalid.
+pub fn set_graphics_settings(settings GraphicsSettings) bool {
+	value := graphics_settings_to_c(settings)
 	return C.renderer_set_graphics_settings(&value)
 }
 
+// graphics_settings returns the most recently requested settings.
 pub fn graphics_settings() GraphicsSettings {
-	value := C.renderer_get_graphics_settings()
-	return GraphicsSettings{
-		shadows_enabled: value.shadows_enabled
-		shadow_quality: unsafe { GraphicsQuality(value.shadow_quality) }
-	}
+	return graphics_settings_from_c(C.renderer_get_graphics_settings())
+}
+
+// active_graphics_settings returns what the renderer is currently using. It
+// can lag the requested settings by one frame while resources are recreated.
+pub fn active_graphics_settings() GraphicsSettings {
+	return graphics_settings_from_c(C.renderer_get_active_graphics_settings())
 }
 
 pub struct Engine {

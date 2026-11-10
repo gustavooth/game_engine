@@ -57,14 +57,75 @@ fn C.engine_get_target_fps(instance_ptr voidptr) i32
 fn C.engine_set_pointer_lock(instance_ptr voidptr, locked bool)
 fn C.engine_is_pointer_locked(instance_ptr voidptr) bool
 
+// Mirrors RendererGraphicsSettings from engine/renderer/renderer.h. Field
+// order, types and booleans must stay in sync with the C struct.
 @[typedef]
 struct C.RendererGraphicsSettings {
 mut:
-	shadows_enabled bool
-	shadow_quality  int
+	preset                      int
+	hdr_enabled                 bool
+	tone_mapping_enabled        bool
+	tone_mapper                 int
+	exposure_compensation       f32
+	auto_exposure_enabled       bool
+	auto_exposure_quality       int
+	auto_exposure_min_ev        f32
+	auto_exposure_max_ev        f32
+	auto_exposure_speed         f32
+	color_grading_enabled       bool
+	contrast                    f32
+	saturation                  f32
+	temperature                 f32
+	tint                        f32
+	lift_r                      f32
+	lift_g                      f32
+	lift_b                      f32
+	gamma_r                     f32
+	gamma_g                     f32
+	gamma_b                     f32
+	gain_r                      f32
+	gain_g                      f32
+	gain_b                      f32
+	vignette                    f32
+	lut_enabled                 bool
+	lut_strength                f32
+	lut_texture                 u32
+	bloom_enabled               bool
+	bloom_quality               int
+	bloom_threshold             f32
+	bloom_intensity             f32
+	bloom_radius                f32
+	shadows_enabled             bool
+	shadow_quality              int
+	shadow_cascades             u32
+	shadow_distance             f32
+	shadow_softness             f32
+	pbr_enabled                 bool
+	ao_enabled                  bool
+	ao_quality                  int
+	ao_radius                   f32
+	ao_intensity                f32
+	gi_enabled                  bool
+	gi_quality                  int
+	gi_intensity                f32
+	gi_distance                 f32
+	atmosphere_enabled          bool
+	atmosphere_quality          int
+	atmosphere_rayleigh         f32
+	atmosphere_mie              f32
+	atmosphere_turbidity        f32
+	atmosphere_mie_anisotropy   f32
+	atmosphere_sun_intensity    f32
+	fog_enabled                 bool
+	fog_density                 f32
+	fog_height_falloff          f32
 }
 fn C.renderer_set_graphics_settings(settings &C.RendererGraphicsSettings) bool
 fn C.renderer_get_graphics_settings() C.RendererGraphicsSettings
+fn C.renderer_get_active_graphics_settings() C.RendererGraphicsSettings
+fn C.renderer_graphics_settings_default() C.RendererGraphicsSettings
+fn C.renderer_graphics_settings_preset(preset int) C.RendererGraphicsSettings
+fn C.renderer_lut_load(path &char) u32
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -107,6 +168,7 @@ fn C.events_fire2(code u16, sender voidptr, data0 u64, data1 u64) bool
 fn C.renderer_texture_load(path &char) u32
 fn C.renderer_text_texture_load(path &char, text &C.EgnString, pixel_height f32, width &u32, height &u32) u32
 fn C.renderer_texture_release(texture u32)
+fn C.renderer_texture_set_repeat(texture u32, repeat bool) bool
 fn C.renderer_mesh_cube() u32
 fn C.renderer_mesh_sphere() u32
 fn C.renderer_mesh_create_static(positions &f32, normals &f32, uvs &f32, vertex_count u32, indices &u32, index_count u32) u32

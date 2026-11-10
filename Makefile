@@ -189,6 +189,7 @@ WEB_C_SRC := \
 	$(ENGINE_DIR)/text/font.c \
 	$(ENGINE_DIR)/math/math.c \
 	$(ENGINE_DIR)/math/noise.c \
+	$(ENGINE_DIR)/renderer/renderer_settings.c \
 	$(ENGINE_DIR)/scene/scene.c \
 	$(ENGINE_DIR)/scene/component.c \
 	$(ENGINE_DIR)/physics/physics.c

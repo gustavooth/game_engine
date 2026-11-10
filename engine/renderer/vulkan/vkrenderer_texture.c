@@ -52,6 +52,106 @@ static void texture_transition_layout(VkContext *ctx, VkCommandBuffer command_bu
                        0, 0, 1, &barrier);
 }
 
+static void texture_generate_mipmaps(VkCommandBuffer command_buffer, VkImage image,
+                                     u32 width, u32 height, u32 mip_levels)
+{
+  if (mip_levels <= 1)
+  {
+    VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1,
+                         &barrier);
+    return;
+  }
+
+  // Level 0 is already in TRANSFER_DST. Move it to TRANSFER_SRC for the first
+  // blit; subsequent levels are generated in a chain.
+  VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.image = image;
+  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  barrier.subresourceRange.baseArrayLayer = 0;
+  barrier.subresourceRange.layerCount = 1;
+
+  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  barrier.subresourceRange.baseMipLevel = 0;
+  barrier.subresourceRange.levelCount = 1;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &barrier);
+
+  u32 mip_width = width;
+  u32 mip_height = height;
+  for (u32 level = 1; level < mip_levels; level++)
+  {
+    u32 next_width = mip_width > 1 ? mip_width >> 1 : 1;
+    u32 next_height = mip_height > 1 ? mip_height >> 1 : 1;
+
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.subresourceRange.baseMipLevel = level;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &barrier);
+
+    VkImageBlit blit = {0};
+    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.srcSubresource.mipLevel = level - 1;
+    blit.srcSubresource.layerCount = 1;
+    blit.srcOffsets[1].x = (i32)mip_width;
+    blit.srcOffsets[1].y = (i32)mip_height;
+    blit.srcOffsets[1].z = 1;
+    blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.dstSubresource.mipLevel = level;
+    blit.dstSubresource.layerCount = 1;
+    blit.dstOffsets[1].x = (i32)next_width;
+    blit.dstOffsets[1].y = (i32)next_height;
+    blit.dstOffsets[1].z = 1;
+    vkCmdBlitImage(command_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                   VK_FILTER_LINEAR);
+
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.subresourceRange.baseMipLevel = level;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &barrier);
+
+    mip_width = next_width;
+    mip_height = next_height;
+  }
+
+  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  barrier.subresourceRange.baseMipLevel = 0;
+  barrier.subresourceRange.levelCount = mip_levels;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, 0, 0, 0, 1,
+                       &barrier);
+}
+
 b8 vkrenderer_texture_create(VkContext *ctx, const u8 *pixels, u32 width,
                              u32 height, VkRendererTexture *out_texture)
 {
@@ -62,17 +162,22 @@ b8 vkrenderer_texture_create(VkContext *ctx, const u8 *pixels, u32 width,
   out_texture->width = width;
   out_texture->height = height;
 
+  u32 mip_levels = 1;
+  for (u32 size = width > height ? width : height; size > 1; size >>= 1)
+    mip_levels++;
+
   VkImageCreateInfo image_info = {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   image_info.imageType = VK_IMAGE_TYPE_2D;
   image_info.extent.width = width;
   image_info.extent.height = height;
   image_info.extent.depth = 1;
-  image_info.mipLevels = 1;
+  image_info.mipLevels = mip_levels;
   image_info.arrayLayers = 1;
   image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
   image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
   image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+  image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                     VK_IMAGE_USAGE_SAMPLED_BIT;
   image_info.samples = VK_SAMPLE_COUNT_1_BIT;
   image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -156,9 +261,8 @@ b8 vkrenderer_texture_create(VkContext *ctx, const u8 *pixels, u32 width,
   vkCmdCopyBufferToImage(command_buffer.handle, staging_buffer, out_texture->image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
 
-  texture_transition_layout(ctx, command_buffer.handle, out_texture->image,
-                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  texture_generate_mipmaps(command_buffer.handle, out_texture->image, width, height,
+                           mip_levels);
 
   vkrenderer_command_buffer_end_single_use(ctx, ctx->device.graphics_command_pool, &command_buffer, ctx->device.graphics);
 
@@ -170,7 +274,7 @@ b8 vkrenderer_texture_create(VkContext *ctx, const u8 *pixels, u32 width,
   view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
   view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   view_info.subresourceRange.baseMipLevel = 0;
-  view_info.subresourceRange.levelCount = 1;
+  view_info.subresourceRange.levelCount = mip_levels;
   view_info.subresourceRange.baseArrayLayer = 0;
   view_info.subresourceRange.layerCount = 1;
 
@@ -190,7 +294,7 @@ b8 vkrenderer_texture_create(VkContext *ctx, const u8 *pixels, u32 width,
   sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
   sampler_info.compareOp = VK_COMPARE_OP_NEVER;
   sampler_info.minLod = 0.0f;
-  sampler_info.maxLod = 0.0f;
+  sampler_info.maxLod = (f32)(mip_levels > 0 ? mip_levels - 1 : 0);
   sampler_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
 
   if (ctx->device.features.samplerAnisotropy)
@@ -217,6 +321,7 @@ b8 vkrenderer_texture_create(VkContext *ctx, const u8 *pixels, u32 width,
   vkrenderer_descriptor_update(ctx, out_texture->descriptor_set,
                                out_texture->view, out_texture->sampler);
 
+  out_texture->mip_levels = mip_levels;
   out_texture->used = true;
   return true;
 }
@@ -377,4 +482,55 @@ u32 renderer_text_texture_load(const char *font_path, const EgnString *text, f32
   u32 texture = texture_register_rgba(ctx, pixels, *width, *height, 0);
   egn_font_pixels_free(pixels);
   return texture;
+}
+
+EGNAPI b8 renderer_texture_set_repeat(u32 texture, b8 repeat)
+{
+  VkContext *ctx = vkrenderer_get_context();
+  if (!ctx || !ctx->device.handle || texture == 0 ||
+      texture > VKRENDERER_MAX_TEXTURES)
+    return false;
+
+  VkRendererTexture *slot = &ctx->textures[texture - 1];
+  if (!slot->used)
+    return false;
+
+  VkSamplerCreateInfo sampler_info = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+  sampler_info.magFilter = VK_FILTER_LINEAR;
+  sampler_info.minFilter = VK_FILTER_LINEAR;
+  sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  VkSamplerAddressMode address_mode = repeat
+                                          ? VK_SAMPLER_ADDRESS_MODE_REPEAT
+                                          : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_info.addressModeU = address_mode;
+  sampler_info.addressModeV = address_mode;
+  sampler_info.addressModeW = address_mode;
+  sampler_info.compareOp = VK_COMPARE_OP_NEVER;
+  sampler_info.minLod = 0.0f;
+  sampler_info.maxLod = slot->mip_levels > 0 ? (f32)(slot->mip_levels - 1) : 0.0f;
+  sampler_info.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+
+  if (ctx->device.features.samplerAnisotropy)
+  {
+    sampler_info.anisotropyEnable = VK_TRUE;
+    sampler_info.maxAnisotropy = ctx->device.properties.limits.maxSamplerAnisotropy;
+    if (sampler_info.maxAnisotropy > 8.0f)
+      sampler_info.maxAnisotropy = 8.0f;
+  }
+
+  VkSampler new_sampler = 0;
+  if (vkCreateSampler(ctx->device.handle, &sampler_info, ctx->allocator,
+                      &new_sampler) != VK_SUCCESS)
+  {
+    EGNERROR("VKRENDERER failed to recreate texture sampler");
+    return false;
+  }
+
+  vkDeviceWaitIdle(ctx->device.handle);
+  VkSampler old_sampler = slot->sampler;
+  slot->sampler = new_sampler;
+  vkrenderer_descriptor_update(ctx, slot->descriptor_set, slot->view, slot->sampler);
+  if (old_sampler)
+    vkDestroySampler(ctx->device.handle, old_sampler, ctx->allocator);
+  return true;
 }

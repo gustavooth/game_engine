@@ -4,8 +4,10 @@
 #include "platform/platform.h"
 #include "platform/filemanager.h"
 #include "renderer/renderer.h"
+#include "renderer/renderer_settings.h"
 #include "text/font.h"
 #include <emscripten/emscripten.h>
+#include <stdio.h>
 #include <string.h>
 
 int egn_web_init(void);
@@ -34,9 +36,12 @@ EM_JS(void, web_release_texture, (int id), {
   const texture = renderer?.textures.get(id);
   if (texture && id !== 0) { texture.texture.destroy(); renderer.textures.delete(id); }
 });
-EM_JS(void, web_render_frame, (double dt, int shadows, int quality), {
+EM_JS(void, web_apply_graphics_settings, (const char *json), {
   const renderer = globalThis.egnWebRenderer;
-  renderer.graphicsSettings = { shadowsEnabled: !!shadows, shadowQuality: quality };
+  if (renderer && renderer.applyGraphicsSettings) renderer.applyGraphicsSettings(JSON.parse(UTF8ToString(json)));
+});
+EM_JS(void, web_render_frame, (double dt), {
+  const renderer = globalThis.egnWebRenderer;
   renderer.render(dt);
 });
 EM_JS(void, web_dispose, (), { globalThis.egnWebDispose?.(); });
@@ -60,28 +65,126 @@ EM_JS(int, web_screenshot, (), {
 
 typedef struct WebEngine { b8 running, vsync; i32 target_fps; f64 start, last, delta; } WebEngine;
 static WebEngine engine;
-static RendererGraphicsSettings graphics_settings = {true, RENDERER_QUALITY_MEDIUM};
+static RendererGraphicsSettings graphics_settings;
+static RendererGraphicsSettings active_graphics_settings;
+static b8 graphics_settings_initialized;
+static b8 graphics_settings_dirty;
 
-RendererGraphicsSettings renderer_graphics_settings_default(void)
+static void web_graphics_settings_json(char *out, u64 capacity)
 {
-  RendererGraphicsSettings settings = {true, RENDERER_QUALITY_MEDIUM};
-  return settings;
+  const RendererGraphicsSettings *s = &graphics_settings;
+  snprintf(out, (size_t)capacity,
+           "{\"preset\":%d,\"hdr_enabled\":%d,\"tone_mapping_enabled\":%d,"
+           "\"tone_mapper\":%d,\"exposure_compensation\":%.9g,"
+           "\"auto_exposure_enabled\":%d,\"auto_exposure_quality\":%d,"
+           "\"auto_exposure_min_ev\":%.9g,\"auto_exposure_max_ev\":%.9g,"
+           "\"auto_exposure_speed\":%.9g,"
+           "\"color_grading_enabled\":%d,\"contrast\":%.9g,\"saturation\":%.9g,"
+           "\"temperature\":%.9g,\"tint\":%.9g,"
+           "\"lift_r\":%.9g,\"lift_g\":%.9g,\"lift_b\":%.9g,"
+           "\"gamma_r\":%.9g,\"gamma_g\":%.9g,\"gamma_b\":%.9g,"
+           "\"gain_r\":%.9g,\"gain_g\":%.9g,\"gain_b\":%.9g,"
+           "\"vignette\":%.9g,\"lut_enabled\":%d,\"lut_strength\":%.9g,"
+           "\"bloom_enabled\":%d,\"bloom_quality\":%d,\"bloom_threshold\":%.9g,"
+           "\"bloom_intensity\":%.9g,\"bloom_radius\":%.9g,"
+           "\"shadows_enabled\":%d,\"shadow_quality\":%d,\"shadow_cascades\":%u,"
+           "\"shadow_distance\":%.9g,\"shadow_softness\":%.9g,"
+           "\"pbr_enabled\":%d,\"ao_enabled\":%d,\"ao_quality\":%d,"
+           "\"ao_radius\":%.9g,\"ao_intensity\":%.9g,"
+           "\"gi_enabled\":%d,\"gi_quality\":%d,\"gi_intensity\":%.9g,"
+           "\"gi_distance\":%.9g,\"atmosphere_enabled\":%d,"
+           "\"atmosphere_quality\":%d,\"atmosphere_rayleigh\":%.9g,"
+           "\"atmosphere_mie\":%.9g,\"atmosphere_turbidity\":%.9g,"
+           "\"atmosphere_mie_anisotropy\":%.9g,"
+           "\"atmosphere_sun_intensity\":%.9g,\"fog_enabled\":%d,"
+           "\"fog_density\":%.9g,\"fog_height_falloff\":%.9g}",
+           (int)s->preset, s->hdr_enabled, s->tone_mapping_enabled,
+           (int)s->tone_mapper, s->exposure_compensation,
+           s->auto_exposure_enabled, (int)s->auto_exposure_quality,
+           s->auto_exposure_min_ev, s->auto_exposure_max_ev,
+           s->auto_exposure_speed,
+           s->color_grading_enabled, s->contrast, s->saturation,
+           s->temperature, s->tint,
+           s->lift_r, s->lift_g, s->lift_b,
+           s->gamma_r, s->gamma_g, s->gamma_b,
+           s->gain_r, s->gain_g, s->gain_b,
+           s->vignette, s->lut_enabled, s->lut_strength,
+           s->bloom_enabled, (int)s->bloom_quality, s->bloom_threshold,
+           s->bloom_intensity, s->bloom_radius,
+           s->shadows_enabled, (int)s->shadow_quality, s->shadow_cascades,
+           s->shadow_distance, s->shadow_softness,
+           s->pbr_enabled, s->ao_enabled, (int)s->ao_quality,
+           s->ao_radius, s->ao_intensity,
+           s->gi_enabled, (int)s->gi_quality, s->gi_intensity,
+           s->gi_distance, s->atmosphere_enabled,
+           (int)s->atmosphere_quality, s->atmosphere_rayleigh,
+           s->atmosphere_mie, s->atmosphere_turbidity,
+           s->atmosphere_mie_anisotropy,
+           s->atmosphere_sun_intensity, s->fog_enabled,
+           s->fog_density, s->fog_height_falloff);
 }
+
 b8 renderer_set_graphics_settings(const RendererGraphicsSettings *settings)
 {
-  if (!settings || settings->shadow_quality < RENDERER_QUALITY_LOW ||
-      settings->shadow_quality > RENDERER_QUALITY_HIGH) return false;
+  if (!renderer_graphics_settings_valid(settings))
+    return false;
+
   graphics_settings = *settings;
   graphics_settings.shadows_enabled = !!settings->shadows_enabled;
+  graphics_settings.hdr_enabled = !!settings->hdr_enabled;
+  graphics_settings.auto_exposure_enabled = !!settings->auto_exposure_enabled;
+  graphics_settings.tone_mapping_enabled = !!settings->tone_mapping_enabled;
+  graphics_settings.color_grading_enabled = !!settings->color_grading_enabled;
+  graphics_settings.bloom_enabled = !!settings->bloom_enabled;
+  graphics_settings.pbr_enabled = !!settings->pbr_enabled;
+  graphics_settings.ao_enabled = !!settings->ao_enabled;
+  graphics_settings.gi_enabled = !!settings->gi_enabled;
+  graphics_settings.atmosphere_enabled = !!settings->atmosphere_enabled;
+  graphics_settings.fog_enabled = !!settings->fog_enabled;
+  graphics_settings.lut_enabled = !!settings->lut_enabled;
+
+  if (!graphics_settings_initialized)
+  {
+    active_graphics_settings = graphics_settings;
+    graphics_settings_initialized = true;
+  }
+
+  graphics_settings_dirty = true;
   return true;
 }
-RendererGraphicsSettings renderer_get_graphics_settings(void) { return graphics_settings; }
+
+RendererGraphicsSettings renderer_get_graphics_settings(void)
+{
+  if (!graphics_settings_initialized)
+  {
+    graphics_settings = renderer_graphics_settings_default();
+    active_graphics_settings = graphics_settings;
+    graphics_settings_initialized = true;
+    graphics_settings_dirty = true;
+  }
+  return graphics_settings;
+}
+
+RendererGraphicsSettings renderer_get_active_graphics_settings(void)
+{
+  if (!graphics_settings_initialized)
+    return renderer_get_graphics_settings();
+  return active_graphics_settings;
+}
+
+u32 renderer_lut_load(const char *path)
+{
+  (void)path;
+  return 0;
+}
 
 b8 engine_create_instance(EngineSettings *settings, void **out)
 {
   if (!settings || !out || engine.running || !egn_web_init()) return false;
   engine = (WebEngine){.running = true, .vsync = settings->vsync, .target_fps = settings->target_fps};
   engine.start = engine.last = platform_get_absolute_time();
+  renderer_get_graphics_settings();
+  active_graphics_settings = graphics_settings;
   *out = &engine;
   return true;
 }
@@ -92,7 +195,15 @@ b8 engine_frame(void *instance)
   engine.delta = now - engine.last; engine.last = now;
   if (engine.delta > 0.1) engine.delta = 0.1;
   egn_web_update(engine.delta);
-  web_render_frame(engine.delta, graphics_settings.shadows_enabled, graphics_settings.shadow_quality);
+  if (graphics_settings_dirty)
+  {
+    static char settings_json[2048];
+    web_graphics_settings_json(settings_json, sizeof(settings_json));
+    web_apply_graphics_settings(settings_json);
+    active_graphics_settings = graphics_settings;
+    graphics_settings_dirty = false;
+  }
+  web_render_frame(engine.delta);
   inputs_update(engine.delta);
   emscripten_sleep(engine.target_fps > 0 ? (u32)(1000 / engine.target_fps) : 1);
   return engine.running;
