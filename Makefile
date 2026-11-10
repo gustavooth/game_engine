@@ -124,9 +124,6 @@ BUILD_DIR := build/linux
 
 ENGINE_LIB := $(OUTPUT_LINUX)/$(ENGINE_LIB_NAME)
 GAME_BIN := $(OUTPUT_LINUX)/$(GAME_EXE_NAME)
-WATER_DEMO_BIN := $(OUTPUT_LINUX)/water_demo
-WATER_DEMO_SRC := $(shell find $(GAME_DIR)/water_demo -name '*.v' 2>/dev/null)
-WATER_DEMO_MANIFEST := $(GAME_DIR)/water_demo/v.mod
 
 # -----------------------------------------------------------------------------
 # Compiler flags
@@ -208,7 +205,7 @@ V_PATH := $(abspath $(GAME_DIR)/..)|@vlib|@vmodules
 # Targets
 # -----------------------------------------------------------------------------
 
-.PHONY: all build engine game water-demo run-water run clean v jolt emsdk jolt-web web run-web clean-web naga help test
+.PHONY: all build engine game run clean v jolt emsdk jolt-web web run-web clean-web naga help test
 
 all: engine game
 
@@ -217,13 +214,6 @@ build: all
 engine: $(ENGINE_LIB) $(SPIRV)
 
 game: $(GAME_BIN)
-
-water-demo: engine $(GAME_ASSETS) $(WATER_DEMO_BIN)
-
-$(WATER_DEMO_BIN): $(WATER_DEMO_SRC) $(WATER_DEMO_MANIFEST) $(SDK_V_SRC) $(SDK_MANIFEST) | engine $(GAME_ASSETS)
-	@echo "  V    $@"
-	@$(MKDIR) $(dir $@)
-	@$(V) $(V_FLAGS) -path '$(V_PATH)' -o $@ $(GAME_DIR)/water_demo
 
 TEST_FONT ?= /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 test: engine
@@ -392,9 +382,6 @@ $(OUTPUT_LINUX)/assets/%: $(GAME_DIR)/assets/%
 run: all
 	@$(RUN_CMD)
 
-run-water: all water-demo
-	@cd $(OUTPUT_LINUX) && exec ./water_demo
-
 clean:
 	@echo "  CLEAN build/ output/"
 	@$(CLEAN_CMD)
@@ -441,8 +428,6 @@ help:
 	@echo "  make / make all   build engine + game"
 	@echo "  make engine       build only the engine (library + shaders)"
 	@echo "  make game         build only the game (requires the engine)"
-	@echo "  make water-demo   build the Kenney water map demo"
-	@echo "  make run-water    build and run the water map demo"
 	@echo "  make build        alias for 'make all'"
 	@echo "  make run          build everything and run the game"
 	@echo "  make clean        remove build/ and output/"
