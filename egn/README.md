@@ -367,6 +367,36 @@ O colisor `.capsule` usa `radius` e `size.y` como altura total em unidades
 locais. Sua forma é tridimensional, inclusive quando o corpo está restrito ao
 plano 2D.
 
+### Configuração gráfica
+
+`Settings.graphics` define o lote inicial; `set_graphics_settings` aplica um
+lote completo durante a execução. A engine valida tudo antes de aceitar e
+recria os recursos afetados no próximo frame, sem meio-estado.
+
+```v
+mut graphics := egn.graphics_preset(.ultra)
+mut app := egn.create(egn.Settings{ graphics: graphics })!
+defer { app.destroy() }
+
+// Overrides pontuais sobre o preset.
+graphics = egn.graphics_preset(.high)
+graphics.bloom_intensity = 0.08
+graphics.ao_quality = .ultra
+egn.set_graphics_settings(graphics)
+
+// LUT 3D .cube opcional.
+lut := app.load_lut('assets/luts/warm.cube')!
+graphics = egn.graphics_settings()
+graphics.lut_enabled = true
+graphics.lut_texture = lut.id
+egn.set_graphics_settings(graphics)
+```
+
+`graphics_settings()` devolve o último lote pedido; `active_graphics_settings()`
+devolve o que está renderizando. Os presets são `low`, `medium`, `high`
+(padrão) e `ultra`. Recursos configuráveis: HDR, tone mapper, auto exposure,
+color grading/LUT, sombras CSM, PBR, AO, GI, atmosfera/fog e bloom.
+
 ### Renderização 2D, canvas e texto
 
 `Camera` (também chamada `Camera3D`), `Camera2D` e `Canvas` são
