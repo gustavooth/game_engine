@@ -29,6 +29,7 @@ async function startDemo(EGN, moduleFactory) {
   engine.setAmbient(0.09, 0.1, 0.13, 1);
   const groundTexture = await engine.loadTexture("assets/textures/ground.png");
   const checkerTexture = await engine.loadTexture("assets/textures/checker.png");
+  const particleTexture = await engine.loadTexture("assets/textures/particle.png");
   const crateMesh = await engine.loadOBJ("assets/models/box.obj");
   const fox = await engine.loadGLB("assets/models/fox.glb");
   const foxObject = scene.createObject("Fox");
@@ -36,6 +37,7 @@ async function startDemo(EGN, moduleFactory) {
   foxObject.setEulerDeg(0, 0, 0);
   foxObject.setScale(0.02, 0.02, 0.02);
   foxObject.addModel({ mesh: fox.mesh, texture: fox.texture, color: [1, 1, 1, 1] });
+  foxObject.addAnimation({ clip: 1, speed: 1.3, loop: true });
   const ground = scene.createObject("Ground");
   ground.setPosition(0, -0.05, 0);
   ground.setScale(30, 0.1, 30);
@@ -82,6 +84,51 @@ async function startDemo(EGN, moduleFactory) {
   orangeLight.setScale(0.24, 0.24, 0.24);
   orangeLight.addLight({ type: "point", color: [1, 0.42, 0.08], intensity: 2.4, range: 9 });
   orangeLight.addModel({ mesh: engine.meshSphere(), color: [1, 0.55, 0.1, 1] });
+  const fire = scene.createObject("Camp Fire");
+  fire.setPosition(2.4, 0.25, -1.6);
+  fire.addParticles({
+    maxParticles: 700,
+    texture: particleTexture,
+    spawnRate: 95,
+    lifetime: 1.4,
+    speed: 1.45,
+    speedVariation: 0.35,
+    gravity: 1.2,
+    drag: 0.35,
+    spread: 0.45,
+    radius: 0.16,
+    direction: [0, 1, 0],
+    sizeStart: 0.36,
+    sizeEnd: 0.03,
+    fadeIn: 0.08,
+    fadeOut: 0.35,
+    colorStart: [1, 0.78, 0.25, 1],
+    colorEnd: [0.9, 0.08, 0.02, 0]
+  });
+  fire.addLight({ type: "point", color: [1, 0.42, 0.08], intensity: 2.4, range: 9 });
+
+  const crystalParticles = scene.createObject("Crystal Halo");
+  crystalParticles.setPosition(-2.6, 0.75, -1.2);
+  crystalParticles.addParticles({
+    maxParticles: 260,
+    texture: particleTexture,
+    spawnRate: 38,
+    lifetime: 2,
+    speed: 0.65,
+    speedVariation: 0.5,
+    gravity: -0.15,
+    drag: 0.7,
+    spread: 0.9,
+    radius: 0.55,
+    direction: [0, 1, 0],
+    sizeStart: 0.16,
+    sizeEnd: 0.01,
+    fadeIn: 0.1,
+    fadeOut: 0.3,
+    colorStart: [0.35, 0.75, 1, 0.9],
+    colorEnd: [0.1, 0.2, 1, 0]
+  });
+
   const showcase = scene.createObject("OBJ Showcase");
   showcase.setPosition(3.5, 0.35, -2.5);
   showcase.setEulerDeg(0, 25, 0);

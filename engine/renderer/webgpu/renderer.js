@@ -1,15 +1,86 @@
 import { WasmMath } from "./wasm_math.js";
 import { createCube, createSphere, createQuad, VERTEX_STRIDE } from "./meshes.js";
-import { sceneShader as sceneShaderSource } from "./shaders/scene.js";
-import { shadowShader as shadowShaderSource } from "./shaders/shadow.js";
+import { parseOBJ } from "./loaders/obj.js";
+import { parseGLB } from "./loaders/glb.js";
 const COMPONENT_CAMERA = 0;
 const COMPONENT_MODEL = 1;
+const COMPONENT_ANIMATION = 3;
 const COMPONENT_LIGHT = 4;
+const COMPONENT_PARTICLES = 7;
 const LIGHT_DIRECTIONAL = 0;
 const LIGHT_POINT = 1;
 const SHADOW_SIZE = 2048;
 const GLOBALS_FLOATS = 116;
 const OBJECT_FLOATS = 24;
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function slerp(a, b, t) {
+  let x1 = b[0], y1 = b[1], z1 = b[2], w1 = b[3];
+  let cos = a[0] * x1 + a[1] * y1 + a[2] * z1 + a[3] * w1;
+  if (cos < 0) {
+    cos = -cos;
+    x1 = -x1; y1 = -y1; z1 = -z1; w1 = -w1;
+  }
+  if (cos > 0.9995) {
+    return normalizeQuat([lerp(a[0], x1, t), lerp(a[1], y1, t), lerp(a[2], z1, t), lerp(a[3], w1, t)]);
+  }
+  const angle = Math.acos(Math.min(1, Math.max(-1, cos)));
+  const sin = Math.sin(angle);
+  const wa = Math.sin((1 - t) * angle) / sin;
+  const wb = Math.sin(t * angle) / sin;
+  return [
+    a[0] * wa + x1 * wb,
+    a[1] * wa + y1 * wb,
+    a[2] * wa + z1 * wb,
+    a[3] * wa + w1 * wb,
+  ];
+}
+
+function normalizeQuat(q) {
+  const length = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+  return [q[0] / length, q[1] / length, q[2] / length, q[3] / length];
+}
+
+function sampleChannel(channel, time) {
+  const times = channel.times;
+  const components = channel.components;
+  let key = 0;
+  if (times.length === 0) return null;
+  if (time >= times[times.length - 1]) {
+    key = times.length - 1;
+  } else if (time > times[0]) {
+    for (let i = 0; i + 1 < times.length; i++) {
+      if (time < times[i + 1]) {
+        key = i;
+        break;
+      }
+    }
+  }
+  const t = key + 1 < times.length && times[key + 1] > times[key]
+    ? Math.min(1, Math.max(0, (time - times[key]) / (times[key + 1] - times[key])))
+    : 0;
+  const keyValue = (index) => {
+    const base = channel.interpolation === "CUBICSPLINE" ? (index * 3 + 1) * components : index * components;
+    return base;
+  };
+  let i0 = keyValue(key);
+  let i1 = channel.interpolation === "STEP" || key + 1 >= times.length ? i0 : keyValue(key + 1);
+  if (i0 + components > channel.values.length) i0 = 0;
+  if (i1 + components > channel.values.length) i1 = i0;
+  const v0 = Array.from(channel.values.slice(i0, i0 + components));
+  const v1 = Array.from(channel.values.slice(i1, i1 + components));
+  if (channel.path === "rotation") {
+    const q0 = normalizeQuat(v0);
+    if (channel.interpolation === "STEP" || i0 === i1) return q0;
+    return slerp(q0, v1, t);
+  }
+  if (channel.interpolation === "STEP" || i0 === i1) return v0;
+  return v0.map((value, index) => lerp(value, v1[index], t));
+}
+
 class WebGPURenderer {
   device;
   canvas;
@@ -20,6 +91,7 @@ class WebGPURenderer {
   shadowModule;
   mainPipeline;
   shadowPipeline;
+  particlePipeline;
   frameLayout;
   objectLayout;
   textureLayout;
@@ -31,6 +103,7 @@ class WebGPURenderer {
   textures = /* @__PURE__ */ new Map();
   objectGpu = /* @__PURE__ */ new Map();
   cameraGpu = /* @__PURE__ */ new Map();
+  particleGpu = /* @__PURE__ */ new Map();
   depthTexture;
   depthView;
   shadowTexture;
@@ -39,9 +112,11 @@ class WebGPURenderer {
   shadowGlobals;
   shadowBindGroup;
   scratch;
+  nextMeshId = 100;
+  nextTextureId = 1;
   ambient = [0.09, 0.1, 0.13, 1];
   stats = { objects: 0, drawCalls: 0, cameras: 0, shadowCasters: 0 };
-  constructor(canvas, device, context, format, module) {
+  constructor(canvas, device, context, format, module, shaders) {
     this.canvas = canvas;
     this.device = device;
     this.context = context;
@@ -49,8 +124,9 @@ class WebGPURenderer {
     this.module = module;
     this.scratch = module._malloc(256);
     this.math = new WasmMath(module);
-    this.sceneModule = device.createShaderModule({ code: sceneShaderSource, label: "egn-scene-shader" });
-    this.shadowModule = device.createShaderModule({ code: shadowShaderSource, label: "egn-shadow-shader" });
+    this.sceneModule = device.createShaderModule({ code: shaders.scene, label: "egn-scene-shader" });
+    this.shadowModule = device.createShaderModule({ code: shaders.shadow, label: "egn-shadow-shader" });
+    const particleModule = device.createShaderModule({ code: shaders.particle, label: "egn-particle-shader" });
     this.frameLayout = device.createBindGroupLayout({
       label: "egn-frame-layout",
       entries: [
@@ -113,6 +189,38 @@ class WebGPURenderer {
         depthBiasSlopeScale: 2
       }
     });
+    this.particlePipeline = device.createRenderPipeline({
+      label: "egn-particle-pipeline",
+      layout: device.createPipelineLayout({
+        bindGroupLayouts: [this.frameLayout, this.textureLayout]
+      }),
+      vertex: {
+        module: particleModule,
+        entryPoint: "vs_main",
+        buffers: [{
+          arrayStride: 9 * 4,
+          attributes: [
+            { shaderLocation: 0, offset: 0, format: "float32x3" },
+            { shaderLocation: 1, offset: 12, format: "float32x2" },
+            { shaderLocation: 2, offset: 20, format: "float32x4" }
+          ]
+        }]
+      },
+      fragment: {
+        module: particleModule,
+        entryPoint: "fs_main",
+        targets: [{
+          format,
+          blend: {
+            color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+            alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" }
+          }
+        }]
+      },
+      primitive: { topology: "triangle-list", cullMode: "none" },
+      depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "less" }
+    });
+
     this.createShadowResources();
     this.registerBuiltinMeshes();
     this.createSolidTexture();
@@ -195,8 +303,61 @@ class WebGPURenderer {
       vertexBuffer,
       indexBuffer,
       indexCount: data.indices.length,
-      positions: data.positions
+      positions: data.positions,
+      data,
+      baseVertices: new Float32Array(data.vertices),
+      animated: !!(data.skin && data.animations?.length),
     });
+    if (id >= 100) this.registerCollisionMesh(id, data);
+  }
+
+  registerCollisionMesh(id, data) {
+    if (!data?.positions?.length) return;
+    const positions = data.positions;
+    const indices = new Uint32Array(positions.length / 3);
+    for (let i = 0; i < indices.length; i++) indices[i] = i;
+    const posPtr = this.module._malloc(positions.byteLength);
+    const idxPtr = this.module._malloc(indices.byteLength);
+    this.module.HEAPF32.set(positions, posPtr / 4);
+    this.module.HEAPU8.set(new Uint8Array(indices.buffer), idxPtr);
+    this.module._egn_web_register_mesh(id, posPtr, positions.length / 3, idxPtr, indices.length);
+    this.module._free(posPtr);
+    this.module._free(idxPtr);
+  }
+
+  async loadTexture(url) {
+    const id = this.nextTextureId++;
+    await this.registerTexture(id, url);
+    return id;
+  }
+
+  async loadOBJ(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`failed to load OBJ '${url}': ${response.status}`);
+    const data = parseOBJ(await response.text());
+    const id = this.nextMeshId++;
+    this.registerMesh(id, data);
+    return { id, data };
+  }
+
+  async loadGLB(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`failed to load GLB '${url}': ${response.status}`);
+    const parsed = parseGLB(await response.arrayBuffer(), this.math);
+    const id = this.nextMeshId++;
+    this.registerMesh(id, parsed.data);
+    let textureId;
+    if (parsed.image) {
+      textureId = this.nextTextureId++;
+      await this.registerTextureFromBlob(textureId, parsed.image);
+    }
+    return { id, data: parsed.data, textureId };
+  }
+
+  registerMeshData(data) {
+    const id = this.nextMeshId++;
+    this.registerMesh(id, data);
+    return id;
   }
   async registerTexture(id, url) {
     if (this.textures.has(id)) {
@@ -276,6 +437,7 @@ class WebGPURenderer {
     const models = [];
     const cameras = [];
     const lights = [];
+    const particles = [];
     const scratch = this.scratch;
     const walk = (object) => {
       if (!object || !m._egn_object_is_active_in_hierarchy(object)) {
@@ -284,6 +446,17 @@ class WebGPURenderer {
       const layer = m._egn_object_get_layer(object);
       m._egn_object_get_world_matrix(object, scratch);
       const world = this.floats(scratch, 0, 16);
+      const animationHandle = m._egn_object_get_component(object, COMPONENT_ANIMATION);
+      let animation = null;
+      if (animationHandle && m._egn_component_is_enabled(animationHandle)) {
+        animation = {
+          clip: m._egn_animation_get_clip(animationHandle),
+          time: m._egn_animation_get_time(animationHandle),
+          speed: m._egn_animation_get_speed(animationHandle),
+          loop: !!m._egn_animation_get_loop(animationHandle),
+          playing: !!m._egn_animation_get_playing(animationHandle),
+        };
+      }
       const modelCount = m._egn_object_component_count(object, COMPONENT_MODEL);
       for (let i = 0; i < modelCount; i++) {
         const component = m._egn_object_get_component_at(object, COMPONENT_MODEL, i);
@@ -298,7 +471,8 @@ class WebGPURenderer {
           mesh: m._egn_model_get_mesh(component),
           texture: m._egn_model_get_texture(component),
           color,
-          castShadows: !!m._egn_model_get_cast_shadows(component)
+          castShadows: !!m._egn_model_get_cast_shadows(component),
+          animation,
         });
       }
       const cameraCount = m._egn_object_component_count(object, COMPONENT_CAMERA);
@@ -351,6 +525,46 @@ class WebGPURenderer {
           castShadows: !!m._egn_light_get_cast_shadows(component)
         });
       }
+      const particleCount = m._egn_object_component_count(object, COMPONENT_PARTICLES);
+      for (let i = 0; i < particleCount; i++) {
+        const component = m._egn_object_get_component_at(object, COMPONENT_PARTICLES, i);
+        if (!component || !m._egn_component_is_enabled(component)) continue;
+        m._egn_particles_get_direction(component, scratch, scratch + 4, scratch + 8);
+        const direction = this.floats(scratch, 0, 3);
+        m._egn_particles_get_size(component, scratch, scratch + 4);
+        const sizes = this.floats(scratch, 0, 2);
+        m._egn_particles_get_color_start(component, scratch, scratch + 4, scratch + 8, scratch + 12);
+        const colorStart = this.floats(scratch, 0, 4);
+        m._egn_particles_get_color_end(component, scratch, scratch + 4, scratch + 8, scratch + 12);
+        const colorEnd = this.floats(scratch, 0, 4);
+        m._egn_particles_get_fade(component, scratch, scratch + 4);
+        const fade = this.floats(scratch, 0, 2);
+        particles.push({
+          object,
+          component,
+          layer,
+          world: world.slice(),
+          texture: m._egn_particles_get_texture(component),
+          max: m._egn_particles_get_max(component),
+          spawnRate: m._egn_particles_get_spawn_rate(component),
+          lifetime: m._egn_particles_get_lifetime(component),
+          speed: m._egn_particles_get_speed(component),
+          speedVariation: m._egn_particles_get_speed_variation(component),
+          gravity: m._egn_particles_get_gravity(component),
+          drag: m._egn_particles_get_drag(component),
+          spread: m._egn_particles_get_spread(component),
+          radius: m._egn_particles_get_radius(component),
+          direction,
+          sizeStart: sizes[0],
+          sizeEnd: sizes[1],
+          sizeScale: m._egn_particles_get_size_scale(component),
+          fadeIn: fade[0],
+          fadeOut: fade[1],
+          colorStart,
+          colorEnd,
+        });
+      }
+
       const childCount = m._egn_object_child_count(object);
       for (let i = 0; i < childCount; i++) {
         walk(m._egn_object_child_at(object, i));
@@ -358,8 +572,228 @@ class WebGPURenderer {
     };
     walk(m._egn_scene_root());
     cameras.sort((a, b) => a.order - b.order);
-    return { models, cameras, lights };
+    return { models, cameras, lights, particles };
   }
+  updateMeshAnimation(mesh, item) {
+    if (!mesh.animated || !mesh.data.skin || !mesh.data.animations || !item.animation) {
+      return;
+    }
+    const clip = mesh.data.animations[item.animation.clip];
+    if (!clip || clip.duration <= 0) return;
+
+    let time = item.animation.time;
+    if (item.animation.loop) {
+      time = ((time % clip.duration) + clip.duration) % clip.duration;
+    } else {
+      time = Math.min(clip.duration, Math.max(0, time));
+    }
+
+    const nodes = mesh.data.nodes;
+    const count = nodes.length;
+    const translations = new Array(count);
+    const rotations = new Array(count);
+    const scales = new Array(count);
+    for (let i = 0; i < count; i++) {
+      translations[i] = nodes[i].translation.slice();
+      rotations[i] = nodes[i].rotation.slice();
+      scales[i] = nodes[i].scale.slice();
+    }
+    for (const channel of clip.channels) {
+      if (channel.node < 0 || channel.node >= count) continue;
+      const value = sampleChannel(channel, time);
+      if (!value) continue;
+      if (channel.path === "translation") translations[channel.node] = value;
+      else if (channel.path === "rotation") rotations[channel.node] = value;
+      else if (channel.path === "scale") scales[channel.node] = value;
+    }
+
+    const worlds = new Array(count);
+    const computeWorld = (index) => {
+      if (worlds[index]) return worlds[index];
+      let local = this.math.mat4.translation(translations[index]);
+      local = this.math.mat4.multiply(local, this.math.mat4.fromQuat(rotations[index]));
+      local = this.math.mat4.multiply(local, this.math.mat4.scaling(scales[index]));
+      const parent = nodes[index].parent;
+      const world = parent >= 0 ? this.math.mat4.multiply(computeWorld(parent), local) : local;
+      worlds[index] = world;
+      return world;
+    };
+    for (let i = 0; i < count; i++) computeWorld(i);
+
+    const skin = mesh.data.skin;
+    const inverseBind = skin.inverseBind;
+    const boneCount = skin.joints.length;
+    const bones = new Float32Array(boneCount * 16);
+    for (let joint = 0; joint < boneCount; joint++) {
+      const node = skin.joints[joint];
+      const world = node >= 0 && node < count ? worlds[node] : this.math.mat4.identity();
+      const inverse = inverseBind.slice(joint * 16, joint * 16 + 16);
+      bones.set(this.math.mat4.multiply(world, inverse), joint * 16);
+    }
+
+    const base = mesh.baseVertices;
+    const vertexCount = base.length / 8;
+    const joints = mesh.data.skinData.joints;
+    const weights = mesh.data.skinData.weights;
+    const output = new Float32Array(base.length);
+    for (let vertex = 0; vertex < vertexCount; vertex++) {
+      let px = 0, py = 0, pz = 0;
+      let nx = 0, ny = 0, nz = 0;
+      const bx = base[vertex * 8], by = base[vertex * 8 + 1], bz = base[vertex * 8 + 2];
+      const bnx = base[vertex * 8 + 3], bny = base[vertex * 8 + 4], bnz = base[vertex * 8 + 5];
+      for (let k = 0; k < 4; k++) {
+        const weight = weights[vertex * 4 + k];
+        if (weight === 0) continue;
+        const joint = joints[vertex * 4 + k];
+        if (joint >= boneCount) continue;
+        const offset = joint * 16;
+        px += weight * (bones[offset] * bx + bones[offset + 4] * by + bones[offset + 8] * bz + bones[offset + 12]);
+        py += weight * (bones[offset + 1] * bx + bones[offset + 5] * by + bones[offset + 9] * bz + bones[offset + 13]);
+        pz += weight * (bones[offset + 2] * bx + bones[offset + 6] * by + bones[offset + 10] * bz + bones[offset + 14]);
+        nx += weight * (bones[offset] * bnx + bones[offset + 4] * bny + bones[offset + 8] * bnz);
+        ny += weight * (bones[offset + 1] * bnx + bones[offset + 5] * bny + bones[offset + 9] * bnz);
+        nz += weight * (bones[offset + 2] * bnx + bones[offset + 6] * bny + bones[offset + 10] * bnz);
+      }
+      const normalLength = Math.hypot(nx, ny, nz) || 1;
+      output[vertex * 8] = px;
+      output[vertex * 8 + 1] = py;
+      output[vertex * 8 + 2] = pz;
+      output[vertex * 8 + 3] = nx / normalLength;
+      output[vertex * 8 + 4] = ny / normalLength;
+      output[vertex * 8 + 5] = nz / normalLength;
+      output[vertex * 8 + 6] = base[vertex * 8 + 6];
+      output[vertex * 8 + 7] = base[vertex * 8 + 7];
+    }
+    this.device.queue.writeBuffer(mesh.vertexBuffer, 0, output);
+  }
+
+  particleState(item) {
+    let state = this.particleGpu.get(item.component);
+    if (!state || state.max !== item.max) {
+      if (state?.buffer) state.buffer.destroy();
+      const max = Math.max(1, item.max);
+      state = {
+        max,
+        buffer: this.device.createBuffer({
+          label: `egn-particles-${item.component}`,
+          size: Math.max(16, max * 6 * 9 * 4),
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        }),
+        positions: new Float32Array(max * 3),
+        velocities: new Float32Array(max * 3),
+        ages: new Float32Array(max),
+        lives: new Float32Array(max),
+        seeded: false,
+      };
+      this.particleGpu.set(item.component, state);
+    }
+    return state;
+  }
+
+  simulateParticles(item, dt) {
+    const state = this.particleState(item);
+    const max = state.max;
+    const target = Math.min(max, Math.floor(Math.max(0, item.spawnRate) * Math.max(0.001, item.lifetime)));
+    const world = item.world;
+    const local = item.direction;
+    let direction = [
+      world[0] * local[0] + world[4] * local[1] + world[8] * local[2],
+      world[1] * local[0] + world[5] * local[1] + world[9] * local[2],
+      world[2] * local[0] + world[6] * local[1] + world[10] * local[2],
+    ];
+    const dl = Math.hypot(direction[0], direction[1], direction[2]) || 1;
+    direction = [direction[0] / dl, direction[1] / dl, direction[2] / dl];
+    const emitter = [world[12], world[13], world[14]];
+    const step = Math.min(0.1, Math.max(0, dt));
+
+    const random = () => Math.random() * 2 - 1;
+    for (let i = 0; i < max; i++) {
+      if (i >= target) {
+        state.lives[i] = 0;
+        continue;
+      }
+      let age = state.ages[i];
+      const life = state.lives[i];
+      if (life <= 0 || age >= life) {
+        const offset = [random(), random(), random()];
+        const ol = Math.hypot(offset[0], offset[1], offset[2]) || 1;
+        const radius = (Math.random()) * item.radius;
+        state.positions[i * 3] = emitter[0] + offset[0] / ol * radius;
+        state.positions[i * 3 + 1] = emitter[1] + offset[1] / ol * radius;
+        state.positions[i * 3 + 2] = emitter[2] + offset[2] / ol * radius;
+        const spread = item.spread * 0.85;
+        let dx = direction[0] + random() * spread;
+        let dy = direction[1] + random() * spread;
+        let dz = direction[2] + random() * spread;
+        const length = Math.hypot(dx, dy, dz) || 1;
+        dx /= length; dy /= length; dz /= length;
+        const speed = item.speed * (1 + (Math.random() * 2 - 1) * item.speedVariation);
+        state.velocities[i * 3] = dx * speed;
+        state.velocities[i * 3 + 1] = dy * speed;
+        state.velocities[i * 3 + 2] = dz * speed;
+        state.ages[i] = 0;
+        state.lives[i] = item.lifetime * (0.85 + Math.random() * 0.3);
+        state.seeded = true;
+        continue;
+      }
+      age += step;
+      let vx = state.velocities[i * 3];
+      let vy = state.velocities[i * 3 + 1] - item.gravity * step;
+      let vz = state.velocities[i * 3 + 2];
+      const damping = Math.max(1 - item.drag * step, 0);
+      vx *= damping; vy *= damping; vz *= damping;
+      state.velocities[i * 3] = vx;
+      state.velocities[i * 3 + 1] = vy;
+      state.velocities[i * 3 + 2] = vz;
+      state.positions[i * 3] += vx * step;
+      state.positions[i * 3 + 1] += vy * step;
+      state.positions[i * 3 + 2] += vz * step;
+      state.ages[i] = age;
+    }
+  }
+
+  buildParticleVertices(item, camera) {
+    const state = this.particleState(item);
+    const vertices = new Float32Array(state.max * 6 * 9);
+    const right = this.math.vec3.normalize([camera.view[0], camera.view[4], camera.view[8]]);
+    const up = this.math.vec3.normalize([camera.view[1], camera.view[5], camera.view[9]]);
+    const corners = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+    let count = 0;
+    for (let i = 0; i < state.max; i++) {
+      const life = state.lives[i];
+      const age = state.ages[i];
+      if (life <= 0 || age >= life) continue;
+      const t = Math.min(1, Math.max(0, age / life));
+      const fadeIn = item.fadeIn > 0 ? Math.min(1, t / item.fadeIn) : 1;
+      const fadeOut = item.fadeOut > 0 ? Math.min(1, (1 - t) / item.fadeOut) : 1;
+      const alpha = Math.min(fadeIn, fadeOut);
+      const size = (item.sizeStart + (item.sizeEnd - item.sizeStart) * t) * item.sizeScale;
+      const r = item.colorStart[0] + (item.colorEnd[0] - item.colorStart[0]) * t;
+      const g = item.colorStart[1] + (item.colorEnd[1] - item.colorStart[1]) * t;
+      const b = item.colorStart[2] + (item.colorEnd[2] - item.colorStart[2]) * t;
+      const a = (item.colorStart[3] + (item.colorEnd[3] - item.colorStart[3]) * t) * alpha;
+      const px = state.positions[i * 3], py = state.positions[i * 3 + 1], pz = state.positions[i * 3 + 2];
+      for (let c = 0; c < 6; c++) {
+        const [cx, cy] = corners[c];
+        const offset = (count * 6 + c) * 9;
+        vertices[offset] = px + right[0] * cx * size + up[0] * cy * size;
+        vertices[offset + 1] = py + right[1] * cx * size + up[1] * cy * size;
+        vertices[offset + 2] = pz + right[2] * cx * size + up[2] * cy * size;
+        vertices[offset + 3] = (cx + 1) * 0.5;
+        vertices[offset + 4] = (cy + 1) * 0.5;
+        vertices[offset + 5] = r;
+        vertices[offset + 6] = g;
+        vertices[offset + 7] = b;
+        vertices[offset + 8] = a;
+      }
+      count++;
+    }
+    if (count > 0) {
+      this.device.queue.writeBuffer(state.buffer, 0, vertices.subarray(0, count * 6 * 9));
+    }
+    return count;
+  }
+
   objectBuffer(item) {
     let gpu = this.objectGpu.get(item.component);
     if (!gpu) {
@@ -446,9 +880,12 @@ class WebGPURenderer {
     const projection = this.math.mat4.ortho(-25, 25, -25, 25, 0.1, 100);
     return this.math.mat4.multiply(projection, view);
   }
-  render() {
+  render(dt = 1 / 60) {
     this.resize();
     const scene = this.readScene();
+    for (const emitter of scene.particles) {
+      this.simulateParticles(emitter, dt);
+    }
     const sun = scene.lights.find((light) => light.type === LIGHT_DIRECTIONAL);
     const pointLights = scene.lights.filter((light) => light.type === LIGHT_POINT).slice(0, 8);
     const camera = scene.cameras[0];
@@ -462,7 +899,13 @@ class WebGPURenderer {
     this.stats.cameras = scene.cameras.length;
     this.stats.drawCalls = 0;
     this.stats.shadowCasters = 0;
+    const animatedMeshes = new Set();
     for (const item of scene.models) {
+      const mesh = this.meshes.get(item.mesh);
+      if (mesh && item.animation && !animatedMeshes.has(item.mesh)) {
+        this.updateMeshAnimation(mesh, item);
+        animatedMeshes.add(item.mesh);
+      }
       this.objectBuffer(item);
     }
     const encoder = this.device.createCommandEncoder({ label: "egn-frame" });
@@ -535,6 +978,22 @@ class WebGPURenderer {
         pass.drawIndexed(mesh.indexCount);
         this.stats.drawCalls++;
       }
+
+      for (const emitter of scene.particles) {
+        const layerVisible = emitter.layer < 32 && (cam.layerMask & (1 << emitter.layer)) !== 0;
+        if (!layerVisible) continue;
+        const count = this.buildParticleVertices(emitter, cam);
+        if (count === 0) continue;
+        const state = this.particleGpu.get(emitter.component);
+        const texture = this.textures.get(emitter.texture) ?? this.solidTexture;
+        pass.setPipeline(this.particlePipeline);
+        pass.setBindGroup(0, frameBindGroups.get(cam));
+        pass.setBindGroup(1, texture.bindGroup);
+        pass.setVertexBuffer(0, state.buffer);
+        pass.draw(count * 6);
+        this.stats.drawCalls++;
+      }
+
       pass.end();
       first = false;
     }

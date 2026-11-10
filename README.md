@@ -422,6 +422,7 @@ Primeira vez:
 
 ```sh
 make emsdk    # instala o Emscripten SDK em third_part/
+make naga     # instala o naga (wgpu) para validar/canonicalizar WGSL
 make web      # gera wasm, SDK JS e demo em output/web/
 make run-web  # abre output/web/index.html no Chromium com WebGPU
 ```
@@ -429,6 +430,11 @@ make run-web  # abre output/web/index.html no Chromium com WebGPU
 O WebGPU exige um contexto seguro (localhost/HTTPS) e um navegador com suporte
 a WebGPU. Em Linux, dependendo da GPU/driver, pode ser necessário habilitar
 `chrome://flags/#enable-unsafe-webgpu` e `chrome://flags/#enable-vulkan`.
+Os shaders web são WGSL. O `make web` usa o **naga** (o compilador de shaders
+do projeto wgpu) para validar e canonicalizar cada `.wgsl` antes de copiá-lo
+para `output/web`; WebGPU não executa GLSL/SPIR-V diretamente. Os shaders
+nativos continuam sendo GLSL compilado para SPIR-V pelo Vulkan.
+
 `make run-web` já abre o Chromium com os flags necessários e com acesso a
 arquivos locais; use `WEB_BROWSER=/caminho/para/chrome` para sobrescrever.
 

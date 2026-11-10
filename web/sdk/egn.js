@@ -1,6 +1,4 @@
 import { WebGPURenderer } from "../../engine/renderer/webgpu/renderer.js";
-import { parseOBJ } from "./obj.js";
-import { parseGLB } from "./glb.js";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 var Projection = /* @__PURE__ */ ((Projection2) => {
@@ -150,6 +148,11 @@ class AnimationComponent extends Component {
   setLoop(loop) {
     this.engine.module._egn_animation_set_loop(this.handle, loop);
     return this;
+  }
+}
+class ParticlesComponent extends Component {
+  emit(count) {
+    this.engine.module._egn_particles_emit(this.handle, count);
   }
 }
 class Object {
@@ -354,6 +357,34 @@ class Object {
     );
     return new AnimationComponent(this.engine, handle);
   }
+  addParticles(options) {
+    const direction = options.direction ?? [0, 1, 0];
+    const start = options.colorStart ?? [1, 0.8, 0.2, 1];
+    const end = options.colorEnd ?? [1, 0.1, 0, 0];
+    const handle = this.engine.module._egn_object_add_particles(
+      this.handle,
+      options.maxParticles ?? 512,
+      options.texture?.id ?? 0,
+      options.spawnRate ?? 64,
+      options.lifetime ?? 2,
+      options.speed ?? 2,
+      options.speedVariation ?? 0.3,
+      options.gravity ?? 1,
+      options.drag ?? 0.2,
+      options.spread ?? 0.35,
+      options.radius ?? 0.1,
+      direction[0], direction[1], direction[2],
+      options.sizeStart ?? 0.3,
+      options.sizeEnd ?? 0.05,
+      options.sizeScale ?? 1,
+      options.fadeIn ?? 0.1,
+      options.fadeOut ?? 0.35,
+      start[0], start[1], start[2], start[3],
+      end[0], end[1], end[2], end[3],
+      options.enabled ?? true
+    );
+    return new ParticlesComponent(this.engine, handle);
+  }
   destroy() {
     this.engine.module._egn_object_destroy(this.handle);
   }
@@ -494,8 +525,6 @@ class Engine {
   renderer;
   canvas;
   device;
-  nextMeshId = 100;
-  nextTextureId = 1;
   raf = 0;
   lastTime = 0;
   static async create(options) {
@@ -539,7 +568,18 @@ class Engine {
     }
     const format = navigator.gpu.getPreferredCanvasFormat();
     context.configure({ device, format, alphaMode: "opaque" });
-    const renderer = new WebGPURenderer(options.canvas, device, context, format, module);
+    const shaderBase = new URL("../../engine/renderer/webgpu/shaders/", import.meta.url);
+    const shaderFiles = ["scene.wgsl", "shadow.wgsl", "particle.wgsl"];
+    const shaderSources = await Promise.all(shaderFiles.map(async (file) => {
+      const response = await fetch(new URL(file, shaderBase));
+      if (!response.ok) throw new Error(`failed to load WGSL shader '${file}'`);
+      return response.text();
+    }));
+    const renderer = new WebGPURenderer(options.canvas, device, context, format, module, {
+      scene: shaderSources[0],
+      shadow: shaderSources[1],
+      particle: shaderSources[2]
+    });
     return new Engine(module, options.canvas, device, renderer);
   }
   get stats() {
@@ -563,58 +603,25 @@ class Engine {
     return new Object(this, handle);
   }
   async loadTexture(url) {
-    const id = this.nextTextureId++;
-    await this.renderer.registerTexture(id, url);
-    return new Texture(id);
+    return new Texture(await this.renderer.loadTexture(url));
   }
   async loadGLB(url) {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`failed to load GLB '${url}': ${response.status}`);
-    }
-    const parsed = parseGLB(await response.arrayBuffer(), this.renderer.math);
-    const id = this.nextMeshId++;
-    this.renderer.registerMesh(id, parsed.data);
-    this.registerCollisionMesh(id, parsed.data);
-    let texture;
-    if (parsed.image) {
-      const textureId = this.nextTextureId++;
-      await this.renderer.registerTextureFromBlob(textureId, parsed.image);
-      texture = new Texture(textureId);
-    }
-    return { mesh: new Mesh(id, parsed.data), texture };
+    const result = await this.renderer.loadGLB(url);
+    return {
+      mesh: new Mesh(result.id, result.data),
+      texture: result.textureId !== undefined ? new Texture(result.textureId) : undefined,
+    };
   }
   async loadOBJ(url) {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`failed to load OBJ '${url}': ${response.status}`);
-    }
-    const data = parseOBJ(await response.text());
-    const id = this.nextMeshId++;
-    this.renderer.registerMesh(id, data);
-    this.registerCollisionMesh(id, data);
-    return new Mesh(id, data);
+    const result = await this.renderer.loadOBJ(url);
+    return new Mesh(result.id, result.data);
   }
-  registerMesh(data, id = this.nextMeshId++) {
-    this.renderer.registerMesh(id, data);
-    this.registerCollisionMesh(id, data);
-    return new Mesh(id, data);
-  }
-  registerCollisionMesh(id, data) {
-    const positions = data.positions;
-    const indices = new Uint32Array(positions.length / 3);
-    for (let i = 0; i < indices.length; i++) indices[i] = i;
-    const posPtr = this.module._malloc(positions.byteLength);
-    const idxPtr = this.module._malloc(indices.byteLength);
-    this.module.HEAPF32.set(positions, posPtr / 4);
-    this.module.HEAPU8.set(new Uint8Array(indices.buffer), idxPtr);
-    this.module._egn_web_register_mesh(id, posPtr, positions.length / 3, idxPtr, indices.length);
-    this.module._free(posPtr);
-    this.module._free(idxPtr);
+  registerMesh(data) {
+    return new Mesh(this.renderer.registerMeshData(data), data);
   }
   tick(dt) {
     this.module._egn_web_update(dt);
-    this.renderer.render();
+    this.renderer.render(dt);
     this.input.endFrame();
   }
   run(update) {
@@ -645,6 +652,7 @@ class Engine {
 import { WebGPURenderer as WebGPURenderer2 } from "../../engine/renderer/webgpu/renderer.js";
 export {
   AnimationComponent,
+  ParticlesComponent,
   CameraComponent,
   ColliderComponent,
   Component,

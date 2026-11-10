@@ -1305,6 +1305,40 @@ void egn_particles_set_speed(void *particles, f32 speed)
     data->speed = speed;
 }
 
+f32 egn_particles_get_speed_variation(void *particles)
+{
+  EgnParticleData *data = particles_data(particles);
+  return data ? data->speed_variation : 0.0f;
+}
+
+f32 egn_particles_get_radius(void *particles)
+{
+  EgnParticleData *data = particles_data(particles);
+  return data ? data->radius : 0.0f;
+}
+
+void egn_particles_get_direction(void *particles, f32 *x, f32 *y, f32 *z)
+{
+  EgnParticleData *data = particles_data(particles);
+  vec3 direction = data ? data->direction : vec3_up();
+  if (x) *x = direction.x;
+  if (y) *y = direction.y;
+  if (z) *z = direction.z;
+}
+
+f32 egn_particles_get_size_scale(void *particles)
+{
+  EgnParticleData *data = particles_data(particles);
+  return data ? data->size_scale : 1.0f;
+}
+
+void egn_particles_get_fade(void *particles, f32 *fade_in, f32 *fade_out)
+{
+  EgnParticleData *data = particles_data(particles);
+  if (fade_in) *fade_in = data ? data->fade_in : 0.1f;
+  if (fade_out) *fade_out = data ? data->fade_out : 0.1f;
+}
+
 f32 egn_particles_get_gravity(void *particles)
 {
   EgnParticleData *data = particles_data(particles);

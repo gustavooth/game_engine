@@ -111,6 +111,10 @@ WEB_ENGINE_JS := $(WEB_DIST)/engine.js
 WEB_ENGINE_WASM := $(WEB_DIST)/engine.wasm
 WEB_BUILD_DIR := build/web
 WEB_EXPORTS := $(WEB_BUILD_DIR)/exports.txt
+NAGA_DIR := third_part/naga
+NAGA ?= $(NAGA_DIR)/bin/naga
+WEB_SHADER_SRC := $(wildcard $(ENGINE_DIR)/renderer/webgpu/shaders/*.wgsl)
+WEB_SHADER_OUT := $(patsubst $(ENGINE_DIR)/renderer/webgpu/shaders/%.wgsl,$(WEB_BUILD_DIR)/shaders/%.wgsl,$(WEB_SHADER_SRC))
 WEB_OPEN ?= xdg-open
 WEB_BROWSER ?= $(shell command -v chromium 2>/dev/null || command -v google-chrome-stable 2>/dev/null || command -v google-chrome 2>/dev/null || command -v chromium-browser 2>/dev/null)
 WEB_BROWSER_FLAGS ?= --allow-file-access-from-files --enable-unsafe-webgpu --enable-features=Vulkan --use-angle=vulkan --ignore-gpu-blocklist --disable-gpu-sandbox --enable-dawn-features=allow_unsafe_apis,disable_adapter_blocklist --disable-dawn-features=disallow_unsafe_apis
@@ -194,7 +198,7 @@ V_PATH := $(abspath $(GAME_DIR)/..)|@vlib|@vmodules
 # Targets
 # -----------------------------------------------------------------------------
 
-.PHONY: all build engine game run clean v jolt emsdk jolt-web web run-web clean-web help
+.PHONY: all build engine game run clean v jolt emsdk jolt-web web run-web clean-web naga help
 
 all: engine game
 
@@ -228,13 +232,19 @@ $(WEB_ENGINE_JS): $(WEB_OBJ) $(JOLT_WEB_LIBS) $(WEB_EXPORTS)
 		-sEXPORTED_FUNCTIONS=@$(WEB_EXPORTS) \
 		-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPF32,HEAPU32
 
-web: $(WEB_ENGINE_JS)
+$(WEB_BUILD_DIR)/shaders/%.wgsl: $(ENGINE_DIR)/renderer/webgpu/shaders/%.wgsl | naga
+	@echo "  NAGA $<"
+	@$(MKDIR) $(dir $@)
+	@$(NAGA) $< $@
+
+web: $(WEB_ENGINE_JS) $(WEB_SHADER_OUT)
 	@echo "  WEB  copying JavaScript SDK and demo"
 	@rm -rf $(WEB_DIST)/web $(WEB_DIST)/engine $(WEB_DIST)/assets
 	@$(MKDIR) $(WEB_DIST)/web $(WEB_DIST)/engine/renderer $(WEB_DIST)/assets
 	@$(COPY) -r $(WEB_DIR)/sdk $(WEB_DIST)/web/sdk
 	@$(COPY) -r $(WEB_DIR)/demo $(WEB_DIST)/web/demo
 	@$(COPY) -r $(ENGINE_DIR)/renderer/webgpu $(WEB_DIST)/engine/renderer/webgpu
+	@$(COPY) $(WEB_SHADER_OUT) $(WEB_DIST)/engine/renderer/webgpu/shaders/
 	@$(COPY) $(WEB_DIR)/demo/index.html $(WEB_DIST)/index.html
 	@$(COPY) -r $(GAME_DIR)/assets/. $(WEB_DIST)/assets/
 	@echo "  WEB  demo ready in $(WEB_DIST)/"
@@ -253,6 +263,15 @@ run-web: web
 clean-web:
 	@echo "  CLEAN web"
 	@rm -rf $(WEB_DIST) $(WEB_BUILD_DIR)
+
+naga:
+	@if [ ! -x "$(NAGA)" ]; then \
+		if ! command -v cargo >/dev/null 2>&1; then \
+			echo "error: naga not found and cargo is unavailable. Install wgpu's naga-cli."; \
+			exit 1; \
+		fi; \
+		cargo install naga-cli --version 30.0.1 --root $(NAGA_DIR); \
+	fi
 
 emsdk:
 	@if [ ! -x "$(EMCC)" ]; then \
@@ -381,6 +400,7 @@ help:
 	@echo "  make jolt         clone/build JoltC + Jolt in third_part/"
 	@echo "  make emsdk        clone/install Emscripten in third_part/"
 	@echo "  make jolt-web     build JoltC/Jolt for WebAssembly"
+	@echo "  make naga         install wgpu/naga WGSL toolchain in third_part/"
 	@echo "  make web          build wasm core + JS SDK + WebGPU demo"
 	@echo "  make run-web      build and open output/web/index.html"
 	@echo "  make clean-web    remove web build artifacts"
@@ -388,7 +408,7 @@ help:
 	@echo ""
 	@echo "Variables:"
 	@echo "  PLATFORM=$(PLATFORM)  CC=$(CC)  CXX=$(CXX)  V=$(V)"
-	@echo "  EMCC=$(EMCC)  WEB_BROWSER=$(WEB_BROWSER)"
+	@echo "  EMCC=$(EMCC)  NAGA=$(NAGA)  WEB_BROWSER=$(WEB_BROWSER)"
 	@echo "  Override: make PLATFORM=linux CC=clang V=/path/to/v"
 
 -include $(ENGINE_DEP)

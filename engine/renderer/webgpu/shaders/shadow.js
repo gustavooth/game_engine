@@ -1,2 +1,0 @@
-// WGSL source for the EGN WebGPU renderer.
-export const shadowShader = "struct ShadowGlobals {\n  lightViewProjection: mat4x4f,\n};\n\nstruct ObjectUniforms {\n  model: mat4x4f,\n  color: vec4f,\n  params: vec4f,\n};\n\n@group(0) @binding(0) var<uniform> globals: ShadowGlobals;\n@group(1) @binding(0) var<uniform> object: ObjectUniforms;\n\n@vertex\nfn vs_main(@location(0) position: vec3f) -> @builtin(position) vec4f {\n  return globals.lightViewProjection * object.model * vec4f(position, 1.0);\n}\n";

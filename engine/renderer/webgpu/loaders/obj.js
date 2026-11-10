@@ -1,4 +1,4 @@
-import { VERTEX_FLOATS } from "../../engine/renderer/webgpu/meshes.js";
+import { VERTEX_FLOATS } from "../meshes.js";
 function parseIndex(raw, count) {
   if (!raw) return -1;
   const value = Number.parseInt(raw, 10);
