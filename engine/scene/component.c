@@ -229,6 +229,7 @@ void *egn_object_add_model(void *object_handle, u32 mesh, u32 texture,
   model->metallic = 0.0f;
   model->roughness = 1.0f;
   model->cast_shadows = cast_shadows;
+  model->water = false;
 
   component->enabled = enabled;
   return component;
@@ -771,6 +772,21 @@ void egn_model_get_pbr(void *model, f32 *metallic, f32 *roughness)
   EgnModelData *data = model_data(model);
   if (metallic) *metallic = data ? data->metallic : 0.0f;
   if (roughness) *roughness = data ? data->roughness : 1.0f;
+}
+
+b8 egn_model_set_water(void *model, b8 water)
+{
+  EgnModelData *data = model_data(model);
+  if (!data)
+    return false;
+  data->water = !!water;
+  return true;
+}
+
+b8 egn_model_get_water(void *model)
+{
+  EgnModelData *data = model_data(model);
+  return data ? data->water : false;
 }
 
 u32 egn_model_get_mesh(void *model)

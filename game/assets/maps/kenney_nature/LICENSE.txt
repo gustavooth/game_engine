@@ -1,0 +1,11 @@
+Kenney Nature Kit
+Created/distributed by Kenney (www.kenney.nl)
+
+License: Creative Commons Zero (CC0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+You can use this content for personal, educational and commercial purposes.
+Crediting Kenney is appreciated but not required.
+
+Source: https://kenney.nl/assets/nature-kit
+GLB mirror: https://github.com/shorepine/kenney/tree/main/3d/nature

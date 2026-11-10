@@ -168,6 +168,7 @@ typedef struct VkRendererMaterial
   f32 metallic_factor;
   f32 roughness_factor;
   b8 has_pbr_factors;
+  b8 is_water;
 } VkRendererMaterial;
 
 typedef struct VkRendererSubMesh
@@ -220,6 +221,7 @@ typedef struct VkContext {
   u32 framebuffer_height;
   u64 framebuffer_generation;
   b8 vsync;
+  f32 elapsed_time;
 
   // image count
   VkRendererCommandBuffer *graphics_command_buffers;

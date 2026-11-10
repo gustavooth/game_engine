@@ -259,6 +259,9 @@ EGNAPI u32 egn_model_get_mesh(void *model);
 // Material parameters are stored per model. Currently used by WebGPU shading.
 EGNAPI b8 egn_model_set_pbr(void *model, f32 metallic, f32 roughness);
 EGNAPI void egn_model_get_pbr(void *model, f32 *metallic, f32 *roughness);
+// Water enables the animated water shading path (waves, fresnel, sun glint).
+EGNAPI b8 egn_model_set_water(void *model, b8 water);
+EGNAPI b8 egn_model_get_water(void *model);
 EGNAPI void egn_model_set_mesh(void *model, u32 mesh);
 EGNAPI u32 egn_model_get_texture(void *model);
 EGNAPI void egn_model_set_texture(void *model, u32 texture);

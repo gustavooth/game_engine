@@ -77,14 +77,26 @@ vec3 apply_tonemap(vec3 colour, int mapper)
 void main()
 {
   vec3 colour = texture(u_scene, v_uv).rgb;
-  vec4 effects = texture(u_effects, v_uv);
-  float ao = mix(1.0, effects.a, pc.effects.x);
+  vec2 effect_texel = 1.0 / vec2(textureSize(u_effects, 0));
+  vec4 effects = vec4(0.0);
+  float effect_weight = 0.0;
+  for (int y = -2; y <= 2; y++)
+  {
+    for (int x = -2; x <= 2; x++)
+    {
+      effects += texture(u_effects, v_uv + vec2(float(x), float(y)) * effect_texel);
+      effect_weight += 1.0;
+    }
+  }
+  effects /= max(effect_weight, 0.0001);
+  float ao = mix(1.0, effects.a, pc.effects.x * pc.effects.w);
   vec3 gi = effects.rgb * pc.effects.y * pc.effects.z;
   colour = colour * ao + gi;
   colour += texture(u_bloom, v_uv).rgb * pc.bloom.x * pc.bloom.y;
 
-  float exposure = pc.exposure_mode.x > 0.5 ? exposure_data.exposure_value
-                                             : pc.exposure_mode.y;
+  float exposure = pc.exposure_mode.x > 0.5
+                       ? exposure_data.exposure_value * pc.exposure_mode.y
+                       : pc.exposure_mode.y;
   int mapper = int(pc.exposure_tonemap.y + 0.5);
   bool tone_mapping = pc.exposure_tonemap.z > 0.5;
   bool hdr = pc.exposure_tonemap.w > 0.5;

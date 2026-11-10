@@ -84,15 +84,25 @@ fn apply_tonemap(colour: vec3f, mapper: i32) -> vec3f {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   var colour = textureSample(sceneTexture, sceneSampler, input.uv).rgb;
-  let effects = textureSample(effectsTexture, sceneSampler, input.uv);
-  let ao = mix(1.0, effects.a, pc.effects.x);
+  let effectTexel = 1.0 / vec2f(textureDimensions(effectsTexture, 0));
+  var effects = vec4f(0.0);
+  var effectWeight = 0.0;
+  for (var y = -2; y <= 2; y = y + 1) {
+    for (var x = -2; x <= 2; x = x + 1) {
+      effects += textureSample(effectsTexture, sceneSampler,
+          input.uv + vec2f(f32(x), f32(y)) * effectTexel);
+      effectWeight += 1.0;
+    }
+  }
+  effects /= max(effectWeight, 0.0001);
+  let ao = mix(1.0, effects.a, pc.effects.x * pc.effects.w);
   let gi = effects.rgb * pc.effects.y * pc.effects.z;
   colour = colour * ao + gi;
   colour += textureSample(bloomTexture, sceneSampler, input.uv).rgb *
       pc.bloom.x * pc.bloom.y;
 
-  let exposure = select(pc.exposureMode.y, exposureBuffer.exposure,
-      pc.exposureMode.x > 0.5);
+  let exposure = select(pc.exposureMode.y,
+      exposureBuffer.exposure * pc.exposureMode.y, pc.exposureMode.x > 0.5);
   let mapper = i32(pc.exposure_tonemap.y + 0.5);
   let tone_mapping = pc.exposure_tonemap.z > 0.5;
   let hdr = pc.exposure_tonemap.w > 0.5;

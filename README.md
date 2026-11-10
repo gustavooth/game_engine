@@ -14,10 +14,10 @@ do módulo **EGN** (`egn/`).
 - **Etapa 2/3 (concluída):** carregamento de `.obj` multi-material (submeshes +
   `map_Kd`) e `.glb`/glTF binário com skeleton, skinning GPU e clips de
   animação.
-- **Pipeline gráfico ultra:** PBR com mapas completos, HDR, tone mapping,
-  color grading com LUT 3D, CSM com até 4 cascatas, atmospheric scattering,
-  SSAO + SSGI, bloom, auto exposure por histograma e presets
-  low/medium/high/ultra aplicáveis em runtime.
+- **Pipeline gráfico ultra:** PBR com mapas completos, água animada com
+  Fresnel/ondas, HDR, tone mapping, color grading com LUT 3D, CSM com até 4
+  cascatas, atmospheric scattering, SSAO + SSGI, bloom, auto exposure por
+  histograma e presets low/medium/high/ultra aplicáveis em runtime.
 - **Física:** Jolt Physics via JoltC: rigidbodies 2D/3D, colisores box, esfera
   e malha (inclusive malha dinâmica), com timestep fixo.
 - **Partículas:** simulação em compute shader na GPU e renderização de
@@ -117,6 +117,7 @@ make engine     # somente a engine (libengine.so + shaders)
 make game       # somente o jogo (requer a engine já compilada)
 make build      # alias de make all
 make run        # compila tudo e executa o jogo
+make run-water  # compila e executa o demo de mapa com água
 make clean      # remove output/ e build/
 make v          # clona/compila o V em third_part/v
 make help       # lista alvos e variáveis
@@ -412,6 +413,27 @@ Controles:
 A camada de rede continua disponível no SDK (`egn/network.v`), mas o demo
 principal não abre sockets.
 
+## Demo de mapa com água
+
+```sh
+make run-water
+```
+
+O alvo `water-demo` monta um mapa com tiles modulares do
+**Kenney Nature Kit (CC0)** — grama, árvores, pedras, vitórias-régias, fogueira
+e uma ilha central — e adiciona um plano de água procedural. O material de água
+(`Model.water = true`) usa ondas animadas, Fresnel, reflexo do céu e brilho
+solar; o restante do pipeline (PBR, CSM, atmosfera, SSAO/SSGI, bloom, auto
+exposure, color grading e LUT) continua ativo. A câmera orbita o lago e o demo
+roda em `ultra` a ~75-90 fps em 1600x900 na RX 5600 XT.
+
+Controles: `F3` cicla preset, `F4`..`F11` alternam efeitos, `L` alterna o LUT de
+exemplo, `F12` salva `water_demo.png` e `Esc` encerra.
+
+Os assets e a licença estão em `game/assets/maps/kenney_nature/` (README e
+`LICENSE.txt`). Os GLBs foram apenas corrigidos no nó raiz do glTF para
+compatibilidade com o `cgltf`; geometria e materiais são os originais.
+
 ## Assets de terceiros
 
 `game/assets/models/fox.glb` é o modelo Fox do Khronos glTF Sample Models:
@@ -419,6 +441,9 @@ principal não abre sockets.
 - rigging/animação por @tomkranis (CC BY 4.0).
 
 Consulte `game/assets/models/LICENSE_FOX.md` e `game/assets/models/LICENSE_HUMANOID.md`.
+
+`game/assets/maps/kenney_nature/` usa o **Kenney Nature Kit** (CC0), obtido do
+mirror público `shorepine/kenney`. Consulte o README e `LICENSE.txt` dessa pasta.
 
 
 ## Build web (WASM + WebGPU)

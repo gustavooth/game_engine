@@ -25,7 +25,7 @@ float hash12(vec2 p)
 
 vec3 reconstruct_world(vec2 uv, float depth)
 {
-  vec2 ndc = uv * 2.0 - 1.0;
+  vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
   vec4 world = pc.inverse_view_projection * vec4(ndc, depth, 1.0);
   return world.xyz / world.w;
 }
@@ -77,7 +77,7 @@ void main()
         ndc.z < 0.0 || ndc.z > 1.0)
       continue;
 
-    vec2 sample_uv = ndc.xy * 0.5 + 0.5;
+    vec2 sample_uv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     float sample_depth = texture(u_scene_depth, sample_uv).r;
     if (sample_depth >= 0.9999)
       continue;
@@ -90,7 +90,7 @@ void main()
 
     if (ao_enabled)
     {
-      ao += sample_distance < point_distance - bias ? weight : 0.0;
+      ao += point_distance > sample_distance + bias ? weight : 0.0;
       ao_weight += weight;
     }
 

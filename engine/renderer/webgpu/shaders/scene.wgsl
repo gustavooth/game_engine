@@ -23,6 +23,7 @@ struct Globals {
   atmosphere2: vec4f,
   fogParams: vec4f,
   fogColor: vec4f,
+  time: vec4f,
 };
 
 struct ObjectUniforms {
@@ -191,7 +192,25 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
   }
 
   var color: vec3f;
-  if (pbrEnabled) {
+  let isWater = (flags & 16) != 0;
+  if (isWater) {
+    let t = globals.time.x;
+    let p = input.worldPosition.xz;
+    let waveA = sin(p.x * 1.3 + t * 1.7) * cos(p.y * 1.1 - t * 1.3);
+    let waveB = sin(p.y * 1.7 - t * 1.1) * cos(p.x * 1.4 + t * 1.6);
+    let waterNormal = normalize(vec3f(waveA * 0.10, 1.0, waveB * 0.10));
+    let fresnel = pow(1.0 - max(dot(waterNormal, viewDirection), 0.0), 3.0);
+    let deep = toLinear(base.rgb);
+    let sky = mix(globals.ambient.rgb, globals.sun.color.rgb, 0.20) * 0.55;
+    color = mix(deep, sky, clamp(0.55 * fresnel, 0.0, 1.0));
+    let h = normalize(viewDirection + sunDirection);
+    let glint = pow(max(dot(waterNormal, h), 0.0), 220.0);
+    color += globals.sun.color.rgb * globals.sun.direction.w * glint * 1.2;
+    color += pbrLight(vec3f(0.02), 0.0, 0.08, waterNormal, viewDirection, sunDirection) *
+        globals.sun.color.rgb * globals.sun.direction.w * shadow * 0.5;
+    normal = vec3f(0.0);
+    emissive = vec3f(0.0);
+  } else if (pbrEnabled) {
     color = pbrLight(albedo, metallic, roughness, normal, viewDirection, sunDirection) *
         globals.sun.color.rgb * globals.sun.direction.w * shadow;
     color += albedo * globals.ambient.rgb * globals.ambient.a * ao * (1.0 - metallic);

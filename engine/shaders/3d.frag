@@ -34,6 +34,7 @@ layout(set = 2, binding = 0) uniform LightingBlock
   vec4 point_count;
   vec4 fog_params;
   vec4 fog_color;
+  vec4 time;
   PointLight point_lights[MAX_POINT_LIGHTS];
 } lighting;
 
@@ -183,7 +184,36 @@ void main()
   }
 
   vec3 colour;
-  if (pbr_enabled)
+  bool is_water = (flags & 16) != 0;
+  if (is_water)
+  {
+    float t = lighting.time.x;
+    vec2 p = v_world_position.xz;
+    float wave_a = sin(p.x * 1.3 + t * 1.7) * cos(p.y * 1.1 - t * 1.3);
+    float wave_b = sin(p.y * 1.7 - t * 1.1) * cos(p.x * 1.4 + t * 1.6);
+    vec3 water_normal = normalize(vec3(wave_a * 0.10, 1.0, wave_b * 0.10));
+    float fresnel = pow(1.0 - max(dot(water_normal, view_direction), 0.0), 3.0);
+    vec3 deep = to_linear(base.rgb);
+    vec3 sky = mix(lighting.ambient.rgb, lighting.sun_colour.rgb, 0.20) * 0.55;
+    colour = mix(deep, sky, clamp(0.55 * fresnel, 0.0, 1.0));
+    vec3 h = normalize(view_direction + to_sun);
+    float glint = pow(max(dot(water_normal, h), 0.0), 220.0);
+    colour += lighting.sun_colour.rgb * lighting.sun_direction.w * glint * 1.2;
+    colour += pbr_light(vec3(0.02), 0.0, 0.08, water_normal, view_direction, to_sun) *
+              lighting.sun_colour.rgb * lighting.sun_direction.w * shadow * 0.5;
+    if (lighting.fog_params.z > 0.5)
+    {
+      float distance_to_camera = length(lighting.camera_position.xyz - v_world_position);
+      float density = lighting.fog_params.x *
+                      exp(-lighting.fog_params.y * max(v_world_position.y, 0.0));
+      float fog = clamp(1.0 - exp(-density * distance_to_camera), 0.0, 1.0);
+      colour = mix(colour, lighting.fog_color.rgb, fog);
+    }
+    out_colour = vec4(colour, 1.0);
+    out_normal = vec4(0.0);
+    return;
+  }
+  else if (pbr_enabled)
   {
     colour = pbr_light(albedo, metallic, roughness, normal, view_direction, to_sun) *
              lighting.sun_colour.rgb * lighting.sun_direction.w * shadow;

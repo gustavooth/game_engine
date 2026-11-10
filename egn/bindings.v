@@ -307,6 +307,8 @@ fn C.egn_camera_set_order(camera voidptr, order i32)
 fn C.egn_model_get_mesh(model voidptr) u32
 fn C.egn_model_set_pbr(model voidptr, metallic f32, roughness f32) bool
 fn C.egn_model_get_pbr(model voidptr, metallic &f32, roughness &f32)
+fn C.egn_model_set_water(model voidptr, water bool) bool
+fn C.egn_model_get_water(model voidptr) bool
 fn C.egn_model_set_mesh(model voidptr, mesh u32)
 fn C.egn_model_get_texture(model voidptr) u32
 fn C.egn_model_set_texture(model voidptr, texture u32)

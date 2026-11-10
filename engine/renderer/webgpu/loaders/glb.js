@@ -142,6 +142,17 @@ function readMaterial(json, bin, primitive) {
   const material = primitive.material !== undefined ? json.materials?.[primitive.material] : undefined;
   const pbr = material?.pbrMetallicRoughness;
   const emissive = material?.emissiveFactor ?? [0, 0, 0];
+  let metallic = pbr?.metallicFactor ?? 1;
+  let roughness = pbr?.roughnessFactor ?? 1;
+  if (!pbr?.metallicRoughnessTexture && metallic >= 0.999 && roughness >= 0.999) {
+    metallic = 0;
+    roughness = 0.75;
+  }
+  const water = !!material?.name && material.name.toLowerCase().includes("water");
+  if (water) {
+    metallic = 0;
+    roughness = 0.08;
+  }
   return {
     images: {
       baseColor: textureBlob(json, bin, pbr?.baseColorTexture),
@@ -150,8 +161,9 @@ function readMaterial(json, bin, primitive) {
       occlusion: textureBlob(json, bin, material?.occlusionTexture),
       emissive: textureBlob(json, bin, material?.emissiveTexture),
     },
-    metallic: pbr?.metallicFactor ?? 1,
-    roughness: pbr?.roughnessFactor ?? 1,
+    metallic,
+    roughness,
+    water,
     metallicRoughnessTexture: !!pbr?.metallicRoughnessTexture,
     normalTexture: !!material?.normalTexture,
     occlusionTexture: !!material?.occlusionTexture,

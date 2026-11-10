@@ -82,7 +82,7 @@ static void draw_mesh(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
                       VkRendererShader *shader, u32 mesh_handle, u32 texture_handle,
                       mat4 model, mat4 view_projection, vec4 tint, u32 bone_offset,
                       f32 model_metallic, f32 model_roughness, b8 use_material,
-                      VkDescriptorSet *last_texture)
+                      b8 water, VkDescriptorSet *last_texture)
 {
   if (mesh_handle == 0 || mesh_handle > VKRENDERER_MAX_MESHES)
     return;
@@ -126,6 +126,8 @@ static void draw_mesh(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
         flags |= 4u;
       if (material->emissive_texture)
         flags |= 8u;
+      if (water || material->is_water)
+        flags |= 16u;
 
       f32 metallic = material->has_pbr_factors ? material->metallic_factor : model_metallic;
       f32 roughness = material->has_pbr_factors ? material->roughness_factor : model_roughness;
@@ -759,11 +761,11 @@ b8 vkrenderer_scene_prepare(VkContext *ctx, VkRendererCommandBuffer *command_buf
     f32 sun_elevation = lighting.sun_direction.y;
     f32 day = clampf(sun_elevation * 3.0f + 0.35f, 0.0f, 1.0f);
     vec3 night_ambient = vec3_create(0.020f, 0.028f, 0.055f);
-    vec3 day_ambient = vec3_create(0.30f, 0.40f, 0.58f);
+    vec3 day_ambient = vec3_create(0.20f, 0.28f, 0.42f);
     day_ambient = vec3_mul_scalar(day_ambient, 0.6f + 0.4f * graphics.atmosphere_rayleigh);
     vec3 ambient = vec3_add(night_ambient,
                             vec3_mul_scalar(vec3_sub(day_ambient, night_ambient), day));
-    lighting.ambient = vec4_create(ambient.x, ambient.y, ambient.z, 0.9f);
+    lighting.ambient = vec4_create(ambient.x, ambient.y, ambient.z, 0.8f);
 
     vec3 sun_tint = vec3_create(lighting.sun_color.x, lighting.sun_color.y, lighting.sun_color.z);
     vec3 fog_colour = vec3_add(vec3_mul_scalar(sun_tint, 0.55f),
@@ -778,6 +780,7 @@ b8 vkrenderer_scene_prepare(VkContext *ctx, VkRendererCommandBuffer *command_buf
 
   lighting.fog_params = vec4_create(graphics.fog_density, graphics.fog_height_falloff,
                                     graphics.fog_enabled ? 1.0f : 0.0f, 0.0f);
+  lighting.time = vec4_create(ctx->elapsed_time, 0.0f, 0.0f, 0.0f);
 
   vkrenderer_lighting_write(ctx, &lighting);
   vkrenderer_skin_barrier(ctx, command_buffer);
@@ -1304,7 +1307,7 @@ static void render_models(VkContext *ctx, VkRendererCommandBuffer *command_buffe
       vec4 tint = vec4_create(model->r, model->g, model->b, model->a);
       draw_mesh(ctx, command_buffer, &ctx->shader_3d, model->mesh, model->texture,
                 world, view_projection, tint, model->bone_offset,
-                model->metallic, model->roughness, true, last_texture);
+                model->metallic, model->roughness, true, model->water, last_texture);
     }
   }
 
@@ -1360,7 +1363,7 @@ static void render_sprites(VkContext *ctx, VkRendererCommandBuffer *command_buff
       vec4 tint = vec4_create(sprite->r, sprite->g, sprite->b, sprite->a);
       draw_mesh(ctx, command_buffer, &ctx->shader_sprite, ctx->sprite_mesh,
                 sprite->texture, model, view_projection, tint, 0,
-                0.0f, 1.0f, false, last_texture);
+                0.0f, 1.0f, false, false, last_texture);
     }
   }
 

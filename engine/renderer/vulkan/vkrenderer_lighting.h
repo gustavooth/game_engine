@@ -23,6 +23,7 @@ typedef struct VkRendererLighting
   vec4 point_count;    // x = count, yzw = reserved
   vec4 fog_params;     // x = density, y = height falloff, z = enabled, w = unused
   vec4 fog_color;      // rgb = fog colour, w = unused
+  vec4 time;           // x = elapsed seconds
   VkRendererPointLight point_lights[VKRENDERER_MAX_POINT_LIGHTS];
 } VkRendererLighting;
 

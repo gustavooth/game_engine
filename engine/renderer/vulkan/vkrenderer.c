@@ -390,6 +390,7 @@ void renderer_resize(u32 width, u32 height)
 
 b8 renderer_draw_frame(RenderPacket packet)
 {
+  ctx.elapsed_time += (f32)packet.delta_time;
   apply_graphics_settings();
 
   if (!begin_frame())

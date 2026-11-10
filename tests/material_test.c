@@ -17,6 +17,15 @@ int main(void)
   egn_model_get_pbr(model, &metallic, &roughness);
   assert(metallic == 0.75f && roughness == 0.25f);
   assert(!egn_model_set_pbr(0, 0, 1));
+
+  assert(!egn_model_get_water(model));
+  assert(egn_model_set_water(model, true));
+  assert(egn_model_get_water(model));
+  assert(egn_model_set_water(model, false));
+  assert(!egn_model_get_water(model));
+  assert(!egn_model_set_water(0, true));
+  assert(!egn_model_get_water(0));
+
   egn_scene_shutdown();
   return 0;
 }

@@ -217,6 +217,23 @@ static void primitive_material(VkContext *ctx, const cgltf_primitive *primitive,
     out_material->metallic_factor = pbr->metallic_factor;
     out_material->roughness_factor = pbr->roughness_factor;
     out_material->has_pbr_factors = true;
+
+    // Blender exports without a metallic-roughness map often leave both
+    // factors at 1.0. Treat that as the common non-metal default so stylized
+    // assets do not become black mirrors.
+    if (!pbr->metallic_roughness_texture.texture &&
+        pbr->metallic_factor >= 0.999f && pbr->roughness_factor >= 0.999f)
+    {
+      out_material->metallic_factor = 0.0f;
+      out_material->roughness_factor = 0.75f;
+    }
+  }
+
+  if (material->name && strstr(material->name, "water"))
+  {
+    out_material->is_water = true;
+    out_material->metallic_factor = 0.0f;
+    out_material->roughness_factor = 0.08f;
   }
 
   out_material->normal_texture = load_gltf_texture(ctx, &material->normal_texture, base_dir);

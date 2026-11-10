@@ -23,6 +23,7 @@ struct Globals {
   atmosphere2: vec4f,
   fogParams: vec4f,
   fogColor: vec4f,
+  time: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;

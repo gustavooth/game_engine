@@ -156,6 +156,7 @@ pub mut:
 	metallic     f32
 	roughness    f32 = 1.0
 	cast_shadows bool    = true
+	water        bool
 	enabled      bool    = true
 }
 
@@ -493,6 +494,7 @@ pub fn (o Object) add_component[T](component T) T {
 		if !C.egn_model_set_pbr(h, component.metallic, component.roughness) {
 			C.egn_model_get_pbr(h, &result.metallic, &result.roughness)
 		}
+		C.egn_model_set_water(h, component.water)
 		return result
 	} $else $if T is Sprite {
 		h := C.egn_object_add_sprite(o.handle, component.texture.id, component.size.x, component.size.y,
@@ -902,7 +904,6 @@ pub fn (mut m Model) set_color(color Color) {
 }
 
 // Stores both PBR factors atomically; each must be between 0 and 1.
-// WebGPU uses these factors for direct lighting; Vulkan support is pending.
 pub fn (mut m Model) set_pbr(metallic f32, roughness f32) bool {
 	if !C.egn_model_set_pbr(m.handle, metallic, roughness) {
 		return false
@@ -915,6 +916,12 @@ pub fn (mut m Model) set_pbr(metallic f32, roughness f32) bool {
 pub fn (mut m Model) set_cast_shadows(cast_shadows bool) {
 	C.egn_model_set_cast_shadows(m.handle, cast_shadows)
 	m.cast_shadows = cast_shadows
+}
+
+// set_water enables the animated water shading path for this model.
+pub fn (mut m Model) set_water(water bool) {
+	C.egn_model_set_water(m.handle, water)
+	m.water = water
 }
 
 pub fn (mut m Model) destroy() {
@@ -932,6 +939,7 @@ pub fn (mut m Model) apply() {
 		C.egn_model_get_pbr(m.handle, &m.metallic, &m.roughness)
 	}
 	C.egn_model_set_cast_shadows(m.handle, m.cast_shadows)
+	C.egn_model_set_water(m.handle, m.water)
 	C.egn_component_set_enabled(m.handle, m.enabled)
 }
 

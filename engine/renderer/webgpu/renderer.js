@@ -13,7 +13,7 @@ const COMPONENT_PARTICLES = 7;
 const LIGHT_DIRECTIONAL = 0;
 const LIGHT_POINT = 1;
 const SHADOW_CASCADES = 4;
-const GLOBALS_FLOATS = 172;
+const GLOBALS_FLOATS = 176;
 const OBJECT_FLOATS = 44;
 
 function shadowSizeForQuality(quality) {
@@ -189,6 +189,7 @@ class WebGPURenderer {
   shadowGlobals = [];
   shadowBindGroups = [];
   shadowSize = 2048;
+  elapsedTime = 0;
   scratch;
   nextMeshId = 100;
   nextTextureId = 1;
@@ -669,10 +670,12 @@ class WebGPURenderer {
     if (material.normalTexture) flags |= 2;
     if (material.occlusionTexture) flags |= 4;
     if (material.emissiveTexture) flags |= 8;
+    if (material.water) flags |= 16;
     mesh.material = {
       metallic: material.metallic ?? 1,
       roughness: material.roughness ?? 1,
       emissive: material.emissive ?? [0, 0, 0, 1],
+      water: !!material.water,
       flags
     };
     return { id, data: parsed.data, textureId: mesh.defaultTexture };
@@ -961,6 +964,7 @@ class WebGPURenderer {
           color,
           metallic,
           roughness,
+          water: !!m._egn_model_get_water(component),
           castShadows: !!m._egn_model_get_cast_shadows(component),
           animation,
         });
@@ -1345,7 +1349,9 @@ class WebGPURenderer {
     data[20] = item.castShadows ? 1 : 0;
     data[21] = material?.metallic ?? item.metallic ?? 0;
     data[22] = material?.roughness ?? item.roughness ?? 1;
-    data[23] = material?.flags ?? 0;
+    let materialFlags = material?.flags ?? 0;
+    if (item.water) materialFlags |= 16;
+    data[23] = materialFlags;
     data[40] = material?.emissive?.[0] ?? 0;
     data[41] = material?.emissive?.[1] ?? 0;
     data[42] = material?.emissive?.[2] ?? 0;
@@ -1389,13 +1395,13 @@ class WebGPURenderer {
     }
     const day = Math.max(0, Math.min(1, sunDirection[1] * 3 + 0.35));
     const nightAmbient = [0.020, 0.028, 0.055];
-    const dayAmbient = [0.30, 0.40, 0.58];
+    const dayAmbient = [0.20, 0.28, 0.42];
     const ambientScale = day * (0.6 + 0.4 * (settings.atmosphere_rayleigh ?? 1));
     data.set([
       nightAmbient[0] + (dayAmbient[0] - nightAmbient[0]) * ambientScale,
       nightAmbient[1] + (dayAmbient[1] - nightAmbient[1]) * ambientScale,
       nightAmbient[2] + (dayAmbient[2] - nightAmbient[2]) * ambientScale,
-      (settings.atmosphere_enabled ?? true) ? 0.9 : 1.0
+      (settings.atmosphere_enabled ?? true) ? 0.8 : 1.0
     ], 20);
     for (let cascade = 0; cascade < SHADOW_CASCADES; cascade++) {
       const matrix = cascades.matrices[cascade] ?? this.math.mat4.identity();
@@ -1424,6 +1430,7 @@ class WebGPURenderer {
     data.set([0.20 * (0.35 + 0.65 * day) + sunColor[0] * 0.05,
       0.28 * (0.35 + 0.65 * day) + sunColor[1] * 0.05,
       0.36 * (0.35 + 0.65 * day) + sunColor[2] * 0.05, 0], 168);
+    data.set([this.elapsedTime, 0, 0, 0], 172);
     this.device.queue.writeBuffer(gpu.buffer, 0, data);
     return gpu;
   }
@@ -1514,6 +1521,7 @@ class WebGPURenderer {
     return result;
   }
   render(dt = 1 / 60) {
+    this.elapsedTime += dt;
     this.resize();
     const scene = this.readScene();
     // Reclaim buffers when components disappear or become inactive.

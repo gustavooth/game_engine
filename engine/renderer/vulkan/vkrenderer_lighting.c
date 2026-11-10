@@ -9,7 +9,7 @@
 
 static VkRendererLighting current_lighting;
 
-typedef char VkRendererLighting_size_check[(sizeof(VkRendererLighting) == 656) ? 1 : -1];
+typedef char VkRendererLighting_size_check[(sizeof(VkRendererLighting) == 672) ? 1 : -1];
 
 static u32 lighting_frame_index(VkContext *ctx)
 {

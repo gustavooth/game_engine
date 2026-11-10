@@ -169,16 +169,31 @@ com sua cor/depth, permitindo fundos diferentes no split-screen.
 
 ### Model
 
-Renderiza um mesh 3D (cubo/esfera por enquanto; OBJ na próxima etapa) com cor
-sólida ou textura:
+Renderiza um mesh 3D (primitivas, OBJ ou GLB) com cor sólida ou textura,
+fatores PBR e material de água opcional:
 
 ```v
-obj.add_component(Model{
+mut model := obj.add_component(Model{
     mesh: app.mesh_cube()
     texture: checker // opcional; 0/textura vazia = branco
     color: rgb(1.0, 0.42, 0.12)
+    metallic: 0.0
+    roughness: 0.55
+})
+model.set_pbr(0.0, 0.55)
+
+// Água animada: ondas, Fresnel, reflexo do céu e brilho solar.
+water.add_component(Model{
+    mesh: water_plane
+    color: rgba(0.03, 0.22, 0.55, 1.0)
+    water: true
+    cast_shadows: false
 })
 ```
+
+Materiais glTF usam os mapas de base color, metallic-roughness, normal,
+oclusão e emissive quando presentes. Um model com `water: true` ignora o
+caminho PBR padrão e usa o shader de água.
 
 ### Sprite
 

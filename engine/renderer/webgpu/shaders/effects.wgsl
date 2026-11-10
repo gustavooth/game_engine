@@ -97,7 +97,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     let weight = max(dot(normal, sampleDirection), 0.0);
 
     if (aoEnabled) {
-      ao += select(0.0, weight, sampleDistance < pointDistance - bias);
+      ao += select(0.0, weight, pointDistance > sampleDistance + bias);
       aoWeight += weight;
     }
 
