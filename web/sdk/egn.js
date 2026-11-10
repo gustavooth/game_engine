@@ -499,24 +499,37 @@ class Engine {
   raf = 0;
   lastTime = 0;
   static async create(options) {
+    const webgpuHelp = "WebGPU não está disponível. Verifique chrome://gpu e, no Linux, " +
+      "inicie o Chromium com --enable-unsafe-webgpu --enable-features=Vulkan " +
+      "--use-angle=vulkan --ignore-gpu-blocklist. " +
+      "Também é necessário um contexto seguro (localhost/HTTPS).";
     if (!navigator.gpu) {
-      throw new Error("WebGPU is not available in this browser");
+      throw new Error(webgpuHelp);
     }
     const module = await options.moduleFactory();
     if (!module._egn_web_init()) {
       throw new Error("failed to initialize the EGN wasm core");
     }
     const preference = options.powerPreference ?? "high-performance";
-    let adapter = await navigator.gpu.requestAdapter({ powerPreference: preference });
-    if (!adapter && preference !== "low-power") {
-      adapter = await navigator.gpu.requestAdapter({ powerPreference: "low-power" });
-    }
-    if (!adapter) {
-      adapter = await navigator.gpu.requestAdapter();
+    const attempts = [
+      { powerPreference: preference },
+      { powerPreference: "low-power" },
+      {},
+      { forceFallbackAdapter: true },
+      { featureLevel: "compatibility" },
+    ];
+    let adapter = null;
+    for (const request of attempts) {
+      try {
+        adapter = await navigator.gpu.requestAdapter(request);
+      } catch {
+        adapter = null;
+      }
+      if (adapter) break;
     }
     if (!adapter) {
       module._egn_web_shutdown();
-      throw new Error("no suitable WebGPU adapter found");
+      throw new Error(webgpuHelp);
     }
     const device = await adapter.requestDevice();
     const context = options.canvas.getContext("webgpu");

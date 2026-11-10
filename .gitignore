@@ -1,8 +1,7 @@
-bin/
+output/
 build/
 third_part/v/
 third_part/JoltC/
 third_part/JoltPhysics/
 third_part/cmake/
 third_part/emsdk/
-web/dist/

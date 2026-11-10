@@ -9,7 +9,7 @@ diretamente.
 - `bindings.v` declara a ABI C da engine (`fn C.engine_*`, `fn C.inputs_*`,
   `fn C.events_*`, `fn C.renderer_*`, `fn C.egn_*`) e as flags de compilação:
   - `-I @VMODROOT/../engine`: headers da engine;
-  - `-L @VMODROOT/../bin` + `-lengine`: link contra `libengine.so`;
+  - `-L @VMODROOT/../output/linux` + `-lengine`: link contra `libengine.so`;
   - `-Wl,-rpath,'$ORIGIN'`: o executável encontra a biblioteca ao lado dele.
 - `engine.v` expõe `Engine`, `Settings`, loop, input e `app.scene()`.
 - `scene.v` expõe o grafo de cena: `Object`, `Camera`, `Model`, `Sprite`,

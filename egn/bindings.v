@@ -15,11 +15,11 @@ module egn
 #include "network/network.h"
 
 // The SDK lives in <repo>/egn, the engine headers in <repo>/engine and the
-// compiled shared library in <repo>/bin.
+// compiled shared library in <repo>/output/linux.
 #flag -I @VMODROOT/../engine
-#flag -L @VMODROOT/../bin
+#flag -L @VMODROOT/../output/linux
 #flag -lengine
-// Make the binary find libengine.so next to itself (bin/).
+// Make the binary find libengine.so next to itself (output/linux/).
 #flag linux -Wl,-rpath,'$ORIGIN'
 
 // ---------------------------------------------------------------------------

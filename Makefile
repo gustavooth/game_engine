@@ -8,7 +8,7 @@
 #   make engine       build only the engine (library + shaders)
 #   make game         build only the game (engine must be built first)
 #   make run          build everything and run the game
-#   make clean        remove build/ and bin/
+#   make clean        remove build/ and output/
 #   make v            clone/build V into third_part/v
 #   make help         show targets/variables
 #
@@ -49,8 +49,8 @@ ifeq ($(PLATFORM),linux)
   GAME_EXE_NAME := game
   MKDIR := mkdir -p
   COPY := cp
-  CLEAN_CMD := rm -rf build bin
-  RUN_CMD := cd bin && exec ./$(GAME_EXE_NAME)
+  CLEAN_CMD := rm -rf build output
+  RUN_CMD := cd output/linux && exec ./$(GAME_EXE_NAME)
 # Add future platforms here, for example:
 # else ifeq ($(PLATFORM),windows)
 #   PLATFORM_CFLAGS :=
@@ -62,8 +62,8 @@ ifeq ($(PLATFORM),linux)
 #   GAME_EXE_NAME := game.exe
 #   MKDIR := mkdir
 #   COPY := copy /Y
-#   CLEAN_CMD := rmdir /s /q build bin
-#   RUN_CMD := cd bin && $(GAME_EXE_NAME)
+#   CLEAN_CMD := rmdir /s /q build output
+#   RUN_CMD := cd output\linux && $(GAME_EXE_NAME)
 else
   $(error Unsupported platform '$(PLATFORM)'. Add a platform block to the Makefile.)
 endif
@@ -103,18 +103,23 @@ JOLT_WEB_LIBS := $(JOLTC_WEB_DIR)/lib/libjoltc.a $(JOLTC_WEB_DIR)/lib/libJolt.a
 JOLT_WEB_STAMP := $(JOLTC_WEB_DIR)/.egn_jolt_web_built
 
 WEB_DIR := web
-WEB_DIST := $(WEB_DIR)/dist
+OUTPUT_DIR := output
+OUTPUT_LINUX := $(OUTPUT_DIR)/linux
+OUTPUT_WEB := $(OUTPUT_DIR)/web
+WEB_DIST := $(OUTPUT_WEB)
 WEB_ENGINE_JS := $(WEB_DIST)/engine.js
 WEB_ENGINE_WASM := $(WEB_DIST)/engine.wasm
 WEB_BUILD_DIR := build/web
 WEB_EXPORTS := $(WEB_BUILD_DIR)/exports.txt
-WEB_PORT ?= 8091
+WEB_OPEN ?= xdg-open
+WEB_BROWSER ?= $(shell command -v chromium 2>/dev/null || command -v google-chrome-stable 2>/dev/null || command -v google-chrome 2>/dev/null || command -v chromium-browser 2>/dev/null)
+WEB_BROWSER_FLAGS ?= --allow-file-access-from-files --enable-unsafe-webgpu --enable-features=Vulkan --use-angle=vulkan --ignore-gpu-blocklist --disable-gpu-sandbox --enable-dawn-features=allow_unsafe_apis,disable_adapter_blocklist --disable-dawn-features=disallow_unsafe_apis
+WEB_PROFILE ?= $(HOME)/.cache/egn-web-chromium
 
-BUILD_DIR := build
-BIN_DIR := bin
+BUILD_DIR := build/linux
 
-ENGINE_LIB := $(BIN_DIR)/$(ENGINE_LIB_NAME)
-GAME_BIN := $(BIN_DIR)/$(GAME_EXE_NAME)
+ENGINE_LIB := $(OUTPUT_LINUX)/$(ENGINE_LIB_NAME)
+GAME_BIN := $(OUTPUT_LINUX)/$(GAME_EXE_NAME)
 
 # -----------------------------------------------------------------------------
 # Compiler flags
@@ -145,9 +150,9 @@ ENGINE_DEP := $(ENGINE_OBJ:.o=.d)
 VERT_SRC := $(shell find $(ENGINE_DIR) -name '*.vert')
 FRAG_SRC := $(shell find $(ENGINE_DIR) -name '*.frag')
 COMP_SRC := $(shell find $(ENGINE_DIR) -name '*.comp')
-SPIRV := $(patsubst $(ENGINE_DIR)/%.vert,$(BIN_DIR)/%.vert.spv,$(VERT_SRC)) \
-         $(patsubst $(ENGINE_DIR)/%.frag,$(BIN_DIR)/%.frag.spv,$(FRAG_SRC)) \
-         $(patsubst $(ENGINE_DIR)/%.comp,$(BIN_DIR)/%.comp.spv,$(COMP_SRC))
+SPIRV := $(patsubst $(ENGINE_DIR)/%.vert,$(OUTPUT_LINUX)/%.vert.spv,$(VERT_SRC)) \
+         $(patsubst $(ENGINE_DIR)/%.frag,$(OUTPUT_LINUX)/%.frag.spv,$(FRAG_SRC)) \
+         $(patsubst $(ENGINE_DIR)/%.comp,$(OUTPUT_LINUX)/%.comp.spv,$(COMP_SRC))
 
 # -----------------------------------------------------------------------------
 # Game sources
@@ -159,7 +164,7 @@ GAME_MANIFEST := $(GAME_DIR)/v.mod
 SDK_MANIFEST := egn/v.mod
 
 GAME_ASSETS_SRC := $(shell find $(GAME_DIR)/assets -type f 2>/dev/null)
-GAME_ASSETS := $(patsubst $(GAME_DIR)/assets/%,$(BIN_DIR)/assets/%,$(GAME_ASSETS_SRC))
+GAME_ASSETS := $(patsubst $(GAME_DIR)/assets/%,$(OUTPUT_LINUX)/assets/%,$(GAME_ASSETS_SRC))
 
 # Web build: the C core (scene, components, physics and math) is compiled to
 # wasm. The browser-native JS SDK/WebGPU renderer is copied next to it; no
@@ -235,8 +240,15 @@ web: $(WEB_ENGINE_JS)
 	@echo "  WEB  demo ready in $(WEB_DIST)/"
 
 run-web: web
-	@echo "  WEB  serving $(WEB_DIST) at http://localhost:$(WEB_PORT)/"
-	@cd $(WEB_DIST) && python3 -m http.server $(WEB_PORT)
+	@echo "  WEB  opening $(WEB_DIST)/index.html"
+	@if [ -n "$(WEB_BROWSER)" ]; then \
+		"$(WEB_BROWSER)" $(WEB_BROWSER_FLAGS) --user-data-dir=$(WEB_PROFILE) \
+			"file://$(abspath $(WEB_DIST)/index.html)" >/dev/null 2>&1 & \
+	elif command -v $(WEB_OPEN) >/dev/null 2>&1; then \
+		$(WEB_OPEN) "file://$(abspath $(WEB_DIST)/index.html)" >/dev/null 2>&1 || true; \
+	else \
+		echo "open this file manually: $(abspath $(WEB_DIST)/index.html)"; \
+	fi
 
 clean-web:
 	@echo "  CLEAN web"
@@ -283,12 +295,12 @@ $(BUILD_DIR)/$(ENGINE_DIR)/%.o: $(ENGINE_DIR)/%.c | $(JOLT_STAMP)
 	@$(MKDIR) $(dir $@)
 	@$(CC) $(C_FLAGS) $(PLATFORM_CFLAGS) $(DEFINES) $(INC_FLAGS) -c $< -o $@
 
-$(BIN_DIR)/%.spv: $(ENGINE_DIR)/%
+$(OUTPUT_LINUX)/%.spv: $(ENGINE_DIR)/%
 	@echo "  SPV  $<"
 	@$(MKDIR) $(dir $@)
 	@$(GLSLANG) $< -o $@
 
-$(BIN_DIR)/%.comp.spv: $(ENGINE_DIR)/%.comp
+$(OUTPUT_LINUX)/%.comp.spv: $(ENGINE_DIR)/%.comp
 	@echo "  SPV  $<"
 	@$(MKDIR) $(dir $@)
 	@$(GLSLANG) $< -o $@
@@ -308,7 +320,7 @@ $(GAME_BIN): $(GAME_V_SRC) $(SDK_V_SRC) $(GAME_MANIFEST) $(SDK_MANIFEST) $(GAME_
 	@$(MKDIR) $(dir $@)
 	@$(V) $(V_FLAGS) -path '$(V_PATH)' -o $@ $(GAME_DIR)
 
-$(BIN_DIR)/assets/%: $(GAME_DIR)/assets/%
+$(OUTPUT_LINUX)/assets/%: $(GAME_DIR)/assets/%
 	@echo "  COPY $<"
 	@$(MKDIR) $(dir $@)
 	@$(COPY) $< $@
@@ -317,7 +329,7 @@ run: all
 	@$(RUN_CMD)
 
 clean:
-	@echo "  CLEAN build/ bin/"
+	@echo "  CLEAN build/ output/"
 	@$(CLEAN_CMD)
 
 v:
@@ -364,19 +376,19 @@ help:
 	@echo "  make game         build only the game (requires the engine)"
 	@echo "  make build        alias for 'make all'"
 	@echo "  make run          build everything and run the game"
-	@echo "  make clean        remove build/ and bin/"
+	@echo "  make clean        remove build/ and output/"
 	@echo "  make v            clone/build V in third_part/v"
 	@echo "  make jolt         clone/build JoltC + Jolt in third_part/"
 	@echo "  make emsdk        clone/install Emscripten in third_part/"
 	@echo "  make jolt-web     build JoltC/Jolt for WebAssembly"
 	@echo "  make web          build wasm core + JS SDK + WebGPU demo"
-	@echo "  make run-web      build and serve the demo on WEB_PORT=$(WEB_PORT)"
+	@echo "  make run-web      build and open output/web/index.html"
 	@echo "  make clean-web    remove web build artifacts"
 	@echo "  make help         show this help"
 	@echo ""
 	@echo "Variables:"
 	@echo "  PLATFORM=$(PLATFORM)  CC=$(CC)  CXX=$(CXX)  V=$(V)"
-	@echo "  WEB_PORT=$(WEB_PORT)  EMCC=$(EMCC)"
+	@echo "  EMCC=$(EMCC)  WEB_BROWSER=$(WEB_BROWSER)"
 	@echo "  Override: make PLATFORM=linux CC=clang V=/path/to/v"
 
 -include $(ENGINE_DEP)

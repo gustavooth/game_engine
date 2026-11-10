@@ -17,13 +17,15 @@ imported from the engine's C math library compiled into the wasm module.
 
 ```sh
 make emsdk     # first time only
-make web       # builds wasm, SDK and demo in web/dist
-make run-web   # serves web/dist on http://localhost:8091
+make web       # builds wasm, SDK and demo in output/web
+make run-web   # opens output/web/index.html with Chromium WebGPU flags
 ```
 
 No Node.js, npm or bundler is required. `make web` copies the native ES modules
-directly into `web/dist`. The first run also builds JoltC/Jolt for wasm
-(`make jolt-web`).
+directly into `output/web`. The first run also builds JoltC/Jolt for wasm
+(`make jolt-web`). `make run-web` only opens the generated HTML file (no HTTP
+server); it launches Chromium with file-access and WebGPU flags. Override
+`WEB_BROWSER=/path/to/chrome` if needed.
 
 ## JavaScript SDK
 

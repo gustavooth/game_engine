@@ -29,7 +29,7 @@ do módulo **EGN** (`egn/`).
 ## Arquitetura
 
 ```text
-engine/   Núcleo da engine em C, compilado como bin/libengine.so
+engine/   Núcleo da engine em C, compilado como output/linux/libengine.so
           (plataforma, janela, Vulkan, inputs, eventos, memória, log, math,
            cena/objetos/componentes)
 
@@ -43,7 +43,8 @@ third_part/  Dependências de terceiros:
              stb_image.h / stb_image_write.h (decodificação/gravação de imagens)
              v/ (compilador V clonado localmente; não versionado)
 
-bin/      Saída: game, libengine.so, shaders compilados e assets copiados.
+output/linux/  Saída Linux: game, libengine.so, shaders compilados e assets.
+output/web/    Saída web: wasm, SDK JS, renderer WebGPU, demo e assets.
 build/    Objetos intermediários da engine.
 ```
 
@@ -112,7 +113,7 @@ make engine     # somente a engine (libengine.so + shaders)
 make game       # somente o jogo (requer a engine já compilada)
 make build      # alias de make all
 make run        # compila tudo e executa o jogo
-make clean      # remove bin/ e build/
+make clean      # remove output/ e build/
 make v          # clona/compila o V em third_part/v
 make help       # lista alvos e variáveis
 
@@ -122,14 +123,14 @@ make V=/caminho/para/v # força o compilador V
 ```
 
 `make game` compila apenas o jogo (não recompila a engine), mas exige que
-`bin/libengine.so` já exista; use `make engine` antes ou simplesmente `make`.
+`output/linux/libengine.so` já exista; use `make engine` antes ou simplesmente `make`.
 A plataforma é detectada automaticamente (`linux`, `macos`, ...). Novos
 sistemas operacionais podem ser adicionados no bloco de plataforma do
 `Makefile`.
 
-Os assets de `game/assets/` são copiados para `bin/assets/` automaticamente.
+Os assets de `game/assets/` são copiados para `output/linux/assets/` automaticamente.
 Os shaders GLSL em `engine/shaders/` são compilados para SPIR-V em
-`bin/shaders/`.
+`output/linux/shaders/`.
 
 ## Jogo mínimo em V
 
@@ -157,7 +158,7 @@ fn main() {
 Para compilar um jogo que esteja dentro do repositório:
 
 ```sh
-v -o bin/meu_jogo meu_jogo/
+v -o output/linux/meu_jogo meu_jogo/
 ```
 
 O `game/v.mod` define o projeto V do jogo. O Makefile passa
@@ -166,7 +167,7 @@ a pasta `egn/` e a biblioteca padrão continue disponível. Para compilar
 manualmente:
 
 ```sh
-v -path '/caminho/para/game_engine|@vlib|@vmodules' -o bin/game game
+v -path '/caminho/para/game_engine|@vlib|@vmodules' -o output/linux/game game
 ```
 
 Se o jogo ficar fora do repositório, adicione a raiz do repositório ao `-path`
@@ -421,13 +422,15 @@ Primeira vez:
 
 ```sh
 make emsdk    # instala o Emscripten SDK em third_part/
-make web      # gera wasm, SDK JS e demo em web/dist/
-make run-web  # serve em http://localhost:8091
+make web      # gera wasm, SDK JS e demo em output/web/
+make run-web  # abre output/web/index.html no Chromium com WebGPU
 ```
 
 O WebGPU exige um contexto seguro (localhost/HTTPS) e um navegador com suporte
 a WebGPU. Em Linux, dependendo da GPU/driver, pode ser necessário habilitar
 `chrome://flags/#enable-unsafe-webgpu` e `chrome://flags/#enable-vulkan`.
+`make run-web` já abre o Chromium com os flags necessários e com acesso a
+arquivos locais; use `WEB_BROWSER=/caminho/para/chrome` para sobrescrever.
 
 A API JavaScript é carregada assim:
 
