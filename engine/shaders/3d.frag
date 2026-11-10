@@ -10,6 +10,12 @@ layout(location = 3) in vec3 v_world_position;
 
 layout(set = 0, binding = 0) uniform sampler2D u_texture;
 
+// PBR maps: metallic-roughness, normal, occlusion, emissive.
+layout(set = 3, binding = 0) uniform sampler2D u_metallic_roughness;
+layout(set = 3, binding = 1) uniform sampler2D u_normal;
+layout(set = 3, binding = 2) uniform sampler2D u_occlusion;
+layout(set = 3, binding = 3) uniform sampler2D u_emissive;
+
 struct PointLight
 {
   vec4 position;
@@ -34,8 +40,23 @@ layout(set = 2, binding = 2) uniform sampler2DShadow shadow_map_1;
 layout(set = 2, binding = 3) uniform sampler2DShadow shadow_map_2;
 layout(set = 2, binding = 4) uniform sampler2DShadow shadow_map_3;
 
+layout(push_constant) uniform PushConstants
+{
+  mat4 mvp;
+  mat4 model;
+  vec4 tint;
+  uint bone_offset;
+  vec4 material; // metallic, roughness, map flags, PBR enabled
+  vec4 emissive; // rgb, intensity
+} pc;
+
 layout(location = 0) out vec4 out_colour;
 layout(location = 1) out vec4 out_normal;
+
+vec3 to_linear(vec3 colour)
+{
+  return pow(max(colour, vec3(0.0)), vec3(2.2));
+}
 
 float sample_shadow(int cascade, vec3 coord)
 {
@@ -48,6 +69,43 @@ float sample_shadow(int cascade, vec3 coord)
   return texture(shadow_map_3, coord);
 }
 
+vec3 pbr_light(vec3 albedo, float metallic, float roughness, vec3 n, vec3 v, vec3 l)
+{
+  vec3 h = normalize(v + l + vec3(0.00001));
+  float nl = max(dot(n, l), 0.0);
+  float nv = max(dot(n, v), 0.0001);
+  float nh = max(dot(n, h), 0.0);
+  float vh = max(dot(v, h), 0.0);
+  float a = max(roughness * roughness, 0.0025);
+  float a2 = a * a;
+  float d = nh * nh * (a2 - 1.0) + 1.0;
+  float distribution = a2 / max(3.14159265 * d * d, 0.000001);
+  float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+  float geometry = (nv / (nv * (1.0 - k) + k)) *
+                   (nl / max(nl * (1.0 - k) + k, 0.0001));
+  vec3 f0 = mix(vec3(0.04), albedo, metallic);
+  vec3 fresnel = f0 + (vec3(1.0) - f0) * pow(1.0 - vh, 5.0);
+  vec3 specular = distribution * geometry * fresnel / max(4.0 * nv * nl, 0.0001);
+  vec3 diffuse = (vec3(1.0) - fresnel) * (1.0 - metallic) * albedo / 3.14159265;
+  return (diffuse + specular) * nl;
+}
+
+vec3 normal_from_map(vec3 n, vec3 world_position, vec2 uv)
+{
+  vec3 tangent_normal = texture(u_normal, uv).xyz * 2.0 - 1.0;
+  vec3 dp1 = dFdx(world_position);
+  vec3 dp2 = dFdy(world_position);
+  vec2 duv1 = dFdx(uv);
+  vec2 duv2 = dFdy(uv);
+  vec3 dp2perp = cross(dp2, n);
+  vec3 dp1perp = cross(n, dp1);
+  vec3 tangent = dp2perp * duv1.x + dp1perp * duv2.x;
+  vec3 bitangent = dp2perp * duv1.y + dp1perp * duv2.y;
+  float invmax = inversesqrt(max(dot(tangent, tangent), dot(bitangent, bitangent)));
+  mat3 tbn = mat3(tangent * invmax, bitangent * invmax, n);
+  return normalize(tbn * tangent_normal);
+}
+
 void main()
 {
   vec4 base = texture(u_texture, v_uv) * v_tint;
@@ -57,8 +115,35 @@ void main()
   vec3 normal = normalize(v_normal);
   out_normal = vec4(normal, 1.0);
   vec3 to_sun = normalize(lighting.sun_direction.xyz);
-  float sun_ndl = max(dot(normal, to_sun), 0.0);
+  vec3 view_direction = normalize(lighting.camera_position.xyz - v_world_position + vec3(0.00001));
 
+  int flags = int(pc.material.z + 0.5);
+  bool has_metallic_roughness = (flags & 1) != 0;
+  bool has_normal = (flags & 2) != 0;
+  bool has_occlusion = (flags & 4) != 0;
+  bool has_emissive = (flags & 8) != 0;
+  bool pbr_enabled = pc.material.w > 0.5;
+
+  if (has_normal)
+    normal = normal_from_map(normal, v_world_position, v_uv);
+  out_normal = vec4(normal, 1.0);
+
+  float metallic = clamp(pc.material.x, 0.0, 1.0);
+  float roughness = clamp(pc.material.y, 0.04, 1.0);
+  if (has_metallic_roughness)
+  {
+    vec4 mr = texture(u_metallic_roughness, v_uv);
+    roughness = clamp(pc.material.y * mr.g, 0.04, 1.0);
+    metallic = clamp(pc.material.x * mr.b, 0.0, 1.0);
+  }
+
+  float ao = has_occlusion ? texture(u_occlusion, v_uv).r : 1.0;
+  vec3 albedo = to_linear(base.rgb);
+  vec3 emissive = pow(max(pc.emissive.rgb, vec3(0.0)), vec3(2.2)) * pc.emissive.a;
+  if (has_emissive)
+    emissive *= to_linear(texture(u_emissive, v_uv).rgb);
+
+  float sun_ndl = max(dot(normal, to_sun), 0.0);
   float shadow = 1.0;
   if (lighting.shadow_params.y > 0.5 && sun_ndl > 0.0)
   {
@@ -95,27 +180,56 @@ void main()
     }
   }
 
-  vec3 colour = base.rgb * (lighting.ambient.rgb * lighting.ambient.a +
-                            lighting.sun_colour.rgb * lighting.sun_direction.w * sun_ndl * shadow);
-
-  int light_count = int(lighting.point_count.x);
-  for (int i = 0; i < MAX_POINT_LIGHTS; i++)
+  vec3 colour;
+  if (pbr_enabled)
   {
-    if (i >= light_count)
-      break;
+    colour = pbr_light(albedo, metallic, roughness, normal, view_direction, to_sun) *
+             lighting.sun_colour.rgb * lighting.sun_direction.w * shadow;
+    colour += albedo * lighting.ambient.rgb * lighting.ambient.a * ao * (1.0 - metallic);
 
-    vec3 to_light = lighting.point_lights[i].position.xyz - v_world_position;
-    float distance_to_light = length(to_light);
-    float range = lighting.point_lights[i].position.w;
-    if (distance_to_light >= range)
-      continue;
+    int light_count = int(lighting.point_count.x);
+    for (int i = 0; i < MAX_POINT_LIGHTS; i++)
+    {
+      if (i >= light_count)
+        break;
 
-    vec3 light_dir = to_light / max(distance_to_light, 0.0001);
-    float ndl = max(dot(normal, light_dir), 0.0);
-    float attenuation = pow(clamp(1.0 - distance_to_light / range, 0.0, 1.0), 2.0);
-    colour += base.rgb * lighting.point_lights[i].colour.rgb *
-              lighting.point_lights[i].colour.w * ndl * attenuation;
+      vec3 to_light = lighting.point_lights[i].position.xyz - v_world_position;
+      float distance_to_light = length(to_light);
+      float range = lighting.point_lights[i].position.w;
+      if (distance_to_light >= range)
+        continue;
+
+      vec3 light_dir = to_light / max(distance_to_light, 0.0001);
+      float attenuation = pow(clamp(1.0 - distance_to_light / range, 0.0, 1.0), 2.0);
+      colour += pbr_light(albedo, metallic, roughness, normal, view_direction, light_dir) *
+                lighting.point_lights[i].colour.rgb *
+                lighting.point_lights[i].colour.w * attenuation * ao;
+    }
+  }
+  else
+  {
+    colour = albedo * (lighting.ambient.rgb * lighting.ambient.a * ao +
+                       lighting.sun_colour.rgb * lighting.sun_direction.w * sun_ndl * shadow);
+
+    int light_count = int(lighting.point_count.x);
+    for (int i = 0; i < MAX_POINT_LIGHTS; i++)
+    {
+      if (i >= light_count)
+        break;
+
+      vec3 to_light = lighting.point_lights[i].position.xyz - v_world_position;
+      float distance_to_light = length(to_light);
+      float range = lighting.point_lights[i].position.w;
+      if (distance_to_light >= range)
+        continue;
+
+      vec3 light_dir = to_light / max(distance_to_light, 0.0001);
+      float ndl = max(dot(normal, light_dir), 0.0);
+      float attenuation = pow(clamp(1.0 - distance_to_light / range, 0.0, 1.0), 2.0);
+      colour += albedo * lighting.point_lights[i].colour.rgb *
+                lighting.point_lights[i].colour.w * ndl * attenuation;
+    }
   }
 
-  out_colour = vec4(colour, base.a);
+  out_colour = vec4(colour + emissive, base.a);
 }

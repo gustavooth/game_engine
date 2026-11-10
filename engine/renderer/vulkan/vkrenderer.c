@@ -163,15 +163,16 @@ static b8 create_render_pipelines(void)
   params_3d.binding = &binding_3d;
   params_3d.attributes = attributes_3d;
   params_3d.attribute_count = 5;
-  params_3d.push_constant_size = 148; // mat4 mvp + mat4 model + vec4 tint + uint
+  params_3d.push_constant_size = 192; // scene push + material + emissive (std140 padding)
 
-  VkDescriptorSetLayout model_set_layouts[3] = {
+  VkDescriptorSetLayout model_set_layouts[4] = {
       ctx.descriptor_set_layout,
       vkrenderer_skin_set_layout(&ctx),
       vkrenderer_lighting_set_layout(&ctx),
+      ctx.material_set_layout,
   };
   params_3d.set_layouts = model_set_layouts;
-  params_3d.set_layout_count = 3;
+  params_3d.set_layout_count = 4;
   params_3d.depth_test = true;
   params_3d.depth_write = true;
   params_3d.blending = true;
@@ -263,7 +264,13 @@ b8 renderer_initialize(Window *win, u32 width, u32 height, b8 vsync)
   if (!vkrenderer_post_create(&ctx))
     return false;
 
-  if (ctx.device.properties.limits.maxPushConstantsSize < 148)
+  if (!vkrenderer_material_layout_create(&ctx))
+  {
+    EGNERROR("VKRENDERER failed to create the PBR material descriptor layout");
+    return false;
+  }
+
+  if (ctx.device.properties.limits.maxPushConstantsSize < 192)
   {
     EGNERROR("VKRENDERER device does not support 148 bytes of push constants");
     return false;
@@ -273,6 +280,10 @@ b8 renderer_initialize(Window *win, u32 width, u32 height, b8 vsync)
     return false;
 
   if (!vkrenderer_texture_create_solid(&ctx, 255, 255, 255, 255, &ctx.white_texture))
+    return false;
+  if (!vkrenderer_texture_create_solid(&ctx, 0, 0, 0, 255, &ctx.black_texture))
+    return false;
+  if (!vkrenderer_texture_create_solid(&ctx, 128, 128, 255, 255, &ctx.flat_normal_texture))
     return false;
 
   if (!vkrenderer_particles_create(&ctx))
@@ -327,6 +338,9 @@ void renderer_shutdown()
   }
 
   vkrenderer_texture_destroy(&ctx, &ctx.white_texture);
+  vkrenderer_texture_destroy(&ctx, &ctx.black_texture);
+  vkrenderer_texture_destroy(&ctx, &ctx.flat_normal_texture);
+  vkrenderer_material_layout_destroy(&ctx);
 
   vkrenderer_shader_destroy(&ctx, &ctx.shader_3d);
   vkrenderer_shader_destroy(&ctx, &ctx.shader_sprite);

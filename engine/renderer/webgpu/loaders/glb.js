@@ -126,11 +126,9 @@ function readAnimations(json, bin) {
   return animations;
 }
 
-function readImage(json, bin, primitive) {
-  const material = primitive.material !== undefined ? json.materials?.[primitive.material] : undefined;
-  const textureIndex = material?.pbrMetallicRoughness?.baseColorTexture?.index;
-  if (textureIndex === undefined) return undefined;
-  const texture = json.textures?.[textureIndex];
+function textureBlob(json, bin, textureInfo) {
+  if (!textureInfo || textureInfo.index === undefined) return undefined;
+  const texture = json.textures?.[textureInfo.index];
   const imageIndex = texture?.source;
   const gltfImage = imageIndex !== undefined ? json.images?.[imageIndex] : undefined;
   if (gltfImage?.bufferView === undefined) return undefined;
@@ -138,6 +136,29 @@ function readImage(json, bin, primitive) {
   if (!imageView) return undefined;
   const bytes = new Uint8Array(bin.buffer, bin.byteOffset + (imageView.byteOffset ?? 0), imageView.byteLength).slice();
   return new Blob([bytes.buffer], { type: gltfImage.mimeType ?? "image/png" });
+}
+
+function readMaterial(json, bin, primitive) {
+  const material = primitive.material !== undefined ? json.materials?.[primitive.material] : undefined;
+  const pbr = material?.pbrMetallicRoughness;
+  const emissive = material?.emissiveFactor ?? [0, 0, 0];
+  return {
+    images: {
+      baseColor: textureBlob(json, bin, pbr?.baseColorTexture),
+      metallicRoughness: textureBlob(json, bin, pbr?.metallicRoughnessTexture),
+      normal: textureBlob(json, bin, material?.normalTexture),
+      occlusion: textureBlob(json, bin, material?.occlusionTexture),
+      emissive: textureBlob(json, bin, material?.emissiveTexture),
+    },
+    metallic: pbr?.metallicFactor ?? 1,
+    roughness: pbr?.roughnessFactor ?? 1,
+    metallicRoughnessTexture: !!pbr?.metallicRoughnessTexture,
+    normalTexture: !!material?.normalTexture,
+    occlusionTexture: !!material?.occlusionTexture,
+    emissiveTexture: !!material?.emissiveTexture,
+    emissive: [emissive[0], emissive[1], emissive[2], 1],
+    baseColorFactor: pbr?.baseColorFactor ?? null,
+  };
 }
 
 function parseGLB(buffer, math) {
@@ -186,7 +207,7 @@ function parseGLB(buffer, math) {
   const indices = [];
   const skinJoints = [];
   const skinWeights = [];
-  let image;
+  let materialInfo;
   let skin = null;
 
   for (let nodeIndex = 0; nodeIndex < json.nodes.length; nodeIndex++) {
@@ -250,7 +271,7 @@ function parseGLB(buffer, math) {
       }
 
       for (const index of indexData) indices.push(baseVertex + index);
-      if (!image && primitive.material !== undefined) image = readImage(json, bin, primitive);
+      if (!materialInfo && primitive.material !== undefined) materialInfo = readMaterial(json, bin, primitive);
     }
   }
 
@@ -277,7 +298,7 @@ function parseGLB(buffer, math) {
       },
       animations: readAnimations(json, bin),
     },
-    image,
+    material: materialInfo,
   };
 }
 

@@ -14,3 +14,11 @@ void vkrenderer_descriptor_update(VkContext *ctx, VkDescriptorSet set,
 
 // Releases a descriptor set back to the pool.
 void vkrenderer_descriptor_free(VkContext *ctx, VkDescriptorSet set);
+
+// PBR material maps: metallic-roughness, normal, occlusion and emissive.
+b8 vkrenderer_material_layout_create(VkContext *ctx);
+void vkrenderer_material_layout_destroy(VkContext *ctx);
+b8 vkrenderer_material_descriptor_create(VkContext *ctx,
+                                         const VkRendererMaterial *material,
+                                         VkDescriptorSet *out_set);
+void vkrenderer_material_descriptor_free(VkContext *ctx, VkDescriptorSet set);

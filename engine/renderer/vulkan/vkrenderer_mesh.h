@@ -6,7 +6,7 @@
 b8 vkrenderer_submesh_create(VkContext *ctx,
                              const MeshVertex *vertices, u32 vertex_count,
                              const u32 *indices, u32 index_count,
-                             u32 texture, vec4 base_color,
+                             const VkRendererMaterial *material,
                              VkRendererSubMesh *out_submesh);
 
 /**

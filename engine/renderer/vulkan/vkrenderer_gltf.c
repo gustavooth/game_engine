@@ -1,5 +1,6 @@
 #include "vkrenderer_asset.h"
 #include "vkrenderer_buffer.h"
+#include "vkrenderer_descriptor.h"
 #include "vkrenderer_mesh.h"
 #include "vkrenderer_texture.h"
 #include "core/logger.h"
@@ -25,8 +26,7 @@ typedef struct GltfSubmeshBuild
   u32 vertex_count;
   u32 *indices;
   u32 index_count;
-  u32 texture;
-  vec4 base_color;
+  VkRendererMaterial material;
 } GltfSubmeshBuild;
 
 static void copy_name(char *destination, const char *source)
@@ -194,11 +194,12 @@ static u32 load_gltf_texture(VkContext *ctx, const cgltf_texture_view *view,
 }
 
 static void primitive_material(VkContext *ctx, const cgltf_primitive *primitive,
-                               const char *base_dir, u32 *out_texture,
-                               vec4 *out_base_color)
+                               const char *base_dir, VkRendererMaterial *out_material)
 {
-  *out_texture = 0;
-  *out_base_color = vec4_one();
+  MEMOZERO(out_material, sizeof(*out_material));
+  out_material->base_color_factor = vec4_one();
+  out_material->metallic_factor = 1.0f;
+  out_material->roughness_factor = 1.0f;
 
   if (!primitive->material)
     return;
@@ -207,12 +208,24 @@ static void primitive_material(VkContext *ctx, const cgltf_primitive *primitive,
   if (material->has_pbr_metallic_roughness)
   {
     const cgltf_pbr_metallic_roughness *pbr = &material->pbr_metallic_roughness;
-    *out_base_color = vec4_create(pbr->base_color_factor[0],
-                                  pbr->base_color_factor[1],
-                                  pbr->base_color_factor[2],
-                                  pbr->base_color_factor[3]);
-    *out_texture = load_gltf_texture(ctx, &pbr->base_color_texture, base_dir);
+    out_material->base_color_factor = vec4_create(pbr->base_color_factor[0],
+                                                  pbr->base_color_factor[1],
+                                                  pbr->base_color_factor[2],
+                                                  pbr->base_color_factor[3]);
+    out_material->base_color_texture = load_gltf_texture(ctx, &pbr->base_color_texture, base_dir);
+    out_material->metallic_roughness_texture = load_gltf_texture(ctx, &pbr->metallic_roughness_texture, base_dir);
+    out_material->metallic_factor = pbr->metallic_factor;
+    out_material->roughness_factor = pbr->roughness_factor;
+    out_material->has_pbr_factors = true;
   }
+
+  out_material->normal_texture = load_gltf_texture(ctx, &material->normal_texture, base_dir);
+  out_material->occlusion_texture = load_gltf_texture(ctx, &material->occlusion_texture, base_dir);
+  out_material->emissive_texture = load_gltf_texture(ctx, &material->emissive_texture, base_dir);
+  out_material->emissive_factor = vec4_create(material->emissive_factor[0],
+                                              material->emissive_factor[1],
+                                              material->emissive_factor[2],
+                                              1.0f);
 }
 
 static b8 build_gltf_mesh_data(VkContext *ctx, const cgltf_data *gltf,
@@ -378,7 +391,7 @@ static b8 build_gltf_mesh_data(VkContext *ctx, const cgltf_data *gltf,
           build->indices[index] = index;
       }
 
-      primitive_material(ctx, primitive, base_dir, &build->texture, &build->base_color);
+      primitive_material(ctx, primitive, base_dir, &build->material);
       build_index++;
     }
   }
@@ -414,11 +427,11 @@ static b8 build_gltf_mesh_data(VkContext *ctx, const cgltf_data *gltf,
     GltfSubmeshBuild *build = &builds[i];
     if (!vkrenderer_submesh_create(ctx, build->vertices, build->vertex_count,
                                    build->indices, build->index_count,
-                                   build->texture, build->base_color,
-                                   &submeshes[i]))
+                                   &build->material, &submeshes[i]))
     {
       for (u32 j = 0; j < i; j++)
       {
+        vkrenderer_material_descriptor_free(ctx, submeshes[j].material_set);
         vkrenderer_buffer_destroy(ctx, &submeshes[j].vertex_buffer, &submeshes[j].vertex_memory);
         vkrenderer_buffer_destroy(ctx, &submeshes[j].index_buffer, &submeshes[j].index_memory);
       }

@@ -24,6 +24,19 @@ typedef struct ScenePushConstants
 
 typedef char ScenePushConstants_size_check[(sizeof(ScenePushConstants) == 148) ? 1 : -1];
 
+typedef struct ModelPushConstants
+{
+  mat4 mvp;
+  mat4 model;
+  vec4 tint;
+  u32 bone_offset;
+  u32 padding[3]; // match std140 alignment of the following vec4s
+  vec4 material;  // metallic, roughness, map flags, PBR enabled
+  vec4 emissive;  // rgb, intensity
+} ModelPushConstants;
+
+typedef char ModelPushConstants_size_check[(sizeof(ModelPushConstants) == 192) ? 1 : -1];
+
 typedef struct SceneCameraInfo
 {
   EgnObject *object;
@@ -67,6 +80,7 @@ static VkDescriptorSet resolve_texture(VkContext *ctx, u32 texture)
 static void draw_mesh(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
                       VkRendererShader *shader, u32 mesh_handle, u32 texture_handle,
                       mat4 model, mat4 view_projection, vec4 tint, u32 bone_offset,
+                      f32 model_metallic, f32 model_roughness, b8 use_material,
                       VkDescriptorSet *last_texture)
 {
   if (mesh_handle == 0 || mesh_handle > VKRENDERER_MAX_MESHES)
@@ -86,11 +100,12 @@ static void draw_mesh(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
     if (submesh->index_count == 0)
       continue;
 
+    VkRendererMaterial *material = &submesh->material;
     ScenePushConstants push = base_push;
-    push.tint = vec4_mul(tint, submesh->base_color);
+    push.tint = vec4_mul(tint, material->base_color_factor);
     push.bone_offset = bone_offset;
 
-    u32 resolved_texture = texture_handle != 0 ? texture_handle : submesh->texture;
+    u32 resolved_texture = texture_handle != 0 ? texture_handle : material->base_color_texture;
     VkDescriptorSet texture = resolve_texture(ctx, resolved_texture);
     if (texture != *last_texture)
     {
@@ -99,9 +114,42 @@ static void draw_mesh(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
       *last_texture = texture;
     }
 
-    vkCmdPushConstants(command_buffer->handle, shader->pipeline.layout,
-                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof(ScenePushConstants), &push);
+    if (use_material)
+    {
+      u32 flags = 0;
+      if (material->metallic_roughness_texture)
+        flags |= 1u;
+      if (material->normal_texture)
+        flags |= 2u;
+      if (material->occlusion_texture)
+        flags |= 4u;
+      if (material->emissive_texture)
+        flags |= 8u;
+
+      f32 metallic = material->has_pbr_factors ? material->metallic_factor : model_metallic;
+      f32 roughness = material->has_pbr_factors ? material->roughness_factor : model_roughness;
+
+      ModelPushConstants model_push;
+      MEMOZERO(&model_push, sizeof(model_push));
+      MEMOCPY(&model_push, &push, sizeof(push));
+      model_push.material = vec4_create(metallic, roughness, (f32)flags,
+                                        renderer_get_active_graphics_settings().pbr_enabled ? 1.0f : 0.0f);
+      model_push.emissive = material->emissive_factor;
+
+      if (submesh->material_set)
+        vkCmdBindDescriptorSets(command_buffer->handle, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                shader->pipeline.layout, 3, 1, &submesh->material_set, 0, 0);
+
+      vkCmdPushConstants(command_buffer->handle, shader->pipeline.layout,
+                         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                         0, sizeof(ModelPushConstants), &model_push);
+    }
+    else
+    {
+      vkCmdPushConstants(command_buffer->handle, shader->pipeline.layout,
+                         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                         0, sizeof(ScenePushConstants), &push);
+    }
 
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(command_buffer->handle, 0, 1, &submesh->vertex_buffer, &offset);
@@ -1213,7 +1261,8 @@ static void render_models(VkContext *ctx, VkRendererCommandBuffer *command_buffe
       EgnModelData *model = &component->data.model;
       vec4 tint = vec4_create(model->r, model->g, model->b, model->a);
       draw_mesh(ctx, command_buffer, &ctx->shader_3d, model->mesh, model->texture,
-                world, view_projection, tint, model->bone_offset, last_texture);
+                world, view_projection, tint, model->bone_offset,
+                model->metallic, model->roughness, true, last_texture);
     }
   }
 
@@ -1268,7 +1317,8 @@ static void render_sprites(VkContext *ctx, VkRendererCommandBuffer *command_buff
 
       vec4 tint = vec4_create(sprite->r, sprite->g, sprite->b, sprite->a);
       draw_mesh(ctx, command_buffer, &ctx->shader_sprite, ctx->sprite_mesh,
-                sprite->texture, model, view_projection, tint, 0, last_texture);
+                sprite->texture, model, view_projection, tint, 0,
+                0.0f, 1.0f, false, last_texture);
     }
   }
 

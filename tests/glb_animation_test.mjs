@@ -9,10 +9,13 @@ const mat4 = { identity, translation: identity, fromQuat: identity, scaling: ide
   multiply: identity };
 const bytes = readFileSync(new URL('../game/assets/models/humanoid_idle.glb', import.meta.url));
 const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-const { data, image } = parseGLB(buffer, { mat4 });
-assert.ok(image instanceof Blob);
-assert.equal(image.type, 'image/png');
-assert.ok(image.size > 0);
+const { data, material } = parseGLB(buffer, { mat4 });
+assert.ok(material);
+assert.ok(material.images.baseColor instanceof Blob);
+assert.equal(material.images.baseColor.type, 'image/png');
+assert.ok(material.images.baseColor.size > 0);
+assert.equal(typeof material.metallic, 'number');
+assert.equal(typeof material.roughness, 'number');
 assert.equal(data.animations.length, 8);
 assert.equal(data.animations[2].name, 'Human Armature|Idle');
 assert.equal(data.animations[2].channels.length, 31);

@@ -1,5 +1,6 @@
 #include "vkrenderer_asset.h"
 #include "vkrenderer_buffer.h"
+#include "vkrenderer_descriptor.h"
 #include "vkrenderer_mesh.h"
 #include "core/logger.h"
 #include "core/memo.h"
@@ -27,8 +28,7 @@ typedef struct ObjSubmeshBuild
   u32 index_count;
   u32 index_cursor;
 
-  u32 texture;
-  vec4 base_color;
+  VkRendererMaterial material;
 } ObjSubmeshBuild;
 
 void egn_mesh_asset_destroy(EgnMeshAsset *asset)
@@ -188,22 +188,30 @@ EGNAPI u32 renderer_mesh_load_obj(const char *path)
       goto fail;
     }
 
-    build->texture = 0;
-    build->base_color = vec4_one();
+    MEMOZERO(&build->material, sizeof(build->material));
+    build->material.base_color_factor = vec4_one();
+    build->material.roughness_factor = 1.0f;
 
     if (obj->material_count > 0)
     {
       fastObjMaterial *material_data = &obj->materials[material];
       f32 alpha = material_data->d > 0.0f ? material_data->d : 1.0f;
       if (material_data->Kd[0] != 0.0f || material_data->Kd[1] != 0.0f || material_data->Kd[2] != 0.0f)
-        build->base_color = vec4_create(material_data->Kd[0], material_data->Kd[1],
-                                        material_data->Kd[2], alpha);
+        build->material.base_color_factor = vec4_create(material_data->Kd[0], material_data->Kd[1],
+                                                        material_data->Kd[2], alpha);
 
       if (material_data->map_Kd > 0 && material_data->map_Kd < obj->texture_count)
       {
         fastObjTexture *texture = &obj->textures[material_data->map_Kd];
         if (texture->path)
-          build->texture = renderer_texture_load(texture->path);
+          build->material.base_color_texture = renderer_texture_load(texture->path);
+      }
+
+      if (material_data->map_bump > 0 && material_data->map_bump < obj->texture_count)
+      {
+        fastObjTexture *texture = &obj->textures[material_data->map_bump];
+        if (texture->path)
+          build->material.normal_texture = renderer_texture_load(texture->path);
       }
     }
 
@@ -302,11 +310,11 @@ EGNAPI u32 renderer_mesh_load_obj(const char *path)
     ObjSubmeshBuild *build = &builds[material];
     if (!vkrenderer_submesh_create(ctx, build->vertices, build->vertex_count,
                                    build->indices, build->index_count,
-                                   build->texture, build->base_color,
-                                   &submeshes[submesh_index]))
+                                   &build->material, &submeshes[submesh_index]))
     {
       for (u32 i = 0; i < submesh_index; i++)
       {
+        vkrenderer_material_descriptor_free(ctx, submeshes[i].material_set);
         vkrenderer_buffer_destroy(ctx, &submeshes[i].vertex_buffer, &submeshes[i].vertex_memory);
         vkrenderer_buffer_destroy(ctx, &submeshes[i].index_buffer, &submeshes[i].index_memory);
       }

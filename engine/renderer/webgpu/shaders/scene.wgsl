@@ -23,16 +23,26 @@ struct Globals {
 struct ObjectUniforms {
   model: mat4x4f,
   color: vec4f,
-  params: vec4f,
+  params: vec4f, // cast shadows, metallic, roughness, map flags
   inverseModel: mat4x4f,
+  emissive: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
 @group(2) @binding(0) var texture0: texture_2d<f32>;
 @group(2) @binding(1) var sampler0: sampler;
+@group(3) @binding(0) var metallicRoughnessTexture: texture_2d<f32>;
+@group(3) @binding(1) var normalTexture: texture_2d<f32>;
+@group(3) @binding(2) var occlusionTexture: texture_2d<f32>;
+@group(3) @binding(3) var emissiveTexture: texture_2d<f32>;
+@group(3) @binding(4) var materialSampler: sampler;
 @group(0) @binding(1) var shadowMap: texture_depth_2d_array;
 @group(0) @binding(2) var shadowSampler: sampler_comparison;
+
+fn toLinear(colour: vec3f) -> vec3f {
+  return pow(max(colour, vec3f(0.0)), vec3f(2.2));
+}
 
 fn pbrLight(base: vec3f, metallic: f32, roughness: f32, n: vec3f, v: vec3f, l: vec3f) -> vec3f {
   let h = normalize(v + l + vec3f(0.00001));
@@ -51,6 +61,21 @@ fn pbrLight(base: vec3f, metallic: f32, roughness: f32, n: vec3f, v: vec3f, l: v
   let specular = distribution * geometry * fresnel / max(4.0 * nv * nl, 0.0001);
   let diffuse = (vec3f(1.0) - fresnel) * (1.0 - metallic) * base / 3.14159265;
   return (diffuse + specular) * nl;
+}
+
+fn normalFromMap(n: vec3f, worldPosition: vec3f, uv: vec2f) -> vec3f {
+  let tangentNormal = textureSample(normalTexture, materialSampler, uv).xyz * 2.0 - 1.0;
+  let dp1 = dpdx(worldPosition);
+  let dp2 = dpdy(worldPosition);
+  let duv1 = dpdx(uv);
+  let duv2 = dpdy(uv);
+  let dp2perp = cross(dp2, n);
+  let dp1perp = cross(n, dp1);
+  let tangent = dp2perp * duv1.x + dp1perp * duv2.x;
+  let bitangent = dp2perp * duv1.y + dp1perp * duv2.y;
+  let invmax = inverseSqrt(max(dot(tangent, tangent), dot(bitangent, bitangent)));
+  let tbn = mat3x3f(tangent * invmax, bitangent * invmax, n);
+  return normalize(tbn * tangentNormal);
 }
 
 struct VertexInput {
@@ -87,9 +112,36 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
   let texel = textureSample(texture0, sampler0, input.uv);
   let base = texel * object.color;
 
-  let normal = normalize(input.normal);
+  var normal = normalize(input.normal);
+  let flags = i32(object.params.w + 0.5);
+  let hasMetallicRoughness = (flags & 1) != 0;
+  let hasNormal = (flags & 2) != 0;
+  let hasOcclusion = (flags & 4) != 0;
+  let hasEmissive = (flags & 8) != 0;
+  let pbrEnabled = globals.pointParams.z > 0.5;
+
+  if (hasNormal) {
+    normal = normalFromMap(normal, input.worldPosition, input.uv);
+  }
+
+  var metallic = clamp(object.params.y, 0.0, 1.0);
+  var roughness = clamp(object.params.z, 0.04, 1.0);
+  if (hasMetallicRoughness) {
+    let mr = textureSample(metallicRoughnessTexture, materialSampler, input.uv);
+    roughness = clamp(object.params.z * mr.g, 0.04, 1.0);
+    metallic = clamp(object.params.y * mr.b, 0.0, 1.0);
+  }
+
+  let ao = select(1.0, textureSample(occlusionTexture, materialSampler, input.uv).r, hasOcclusion);
+  let albedo = toLinear(base.rgb);
+  var emissive = toLinear(max(object.emissive.rgb, vec3f(0.0))) * object.emissive.a;
+  if (hasEmissive) {
+    emissive *= toLinear(textureSample(emissiveTexture, materialSampler, input.uv).rgb);
+  }
+
   let sunDirection = normalize(globals.sun.direction.xyz);
   let sunNdl = max(dot(normal, sunDirection), 0.0);
+  let viewDirection = normalize(globals.cameraPosition.xyz - input.worldPosition + vec3f(0.00001));
 
   // Keep textureSampleCompare in uniform control flow: the cascade layer is
   // part of the coordinate, not a branch around the sampling instruction.
@@ -133,29 +185,51 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
     discard;
   }
 
-  let metallic = object.params.y;
-  let roughness = max(object.params.z, 0.05);
-  let viewDirection = normalize(globals.cameraPosition.xyz - input.worldPosition + vec3f(0.00001));
-  var color = base.rgb * globals.ambient.rgb * globals.ambient.a * (1.0 - metallic);
-  color += pbrLight(base.rgb, metallic, roughness, normal, viewDirection, sunDirection) *
-      globals.sun.color.rgb * globals.sun.direction.w * shadow;
+  var color: vec3f;
+  if (pbrEnabled) {
+    color = pbrLight(albedo, metallic, roughness, normal, viewDirection, sunDirection) *
+        globals.sun.color.rgb * globals.sun.direction.w * shadow;
+    color += albedo * globals.ambient.rgb * globals.ambient.a * ao * (1.0 - metallic);
 
-  let pointCount = u32(globals.pointParams.x);
-  for (var i = 0u; i < 8u; i = i + 1u) {
-    if (i >= pointCount) {
-      break;
+    let pointCount = u32(globals.pointParams.x);
+    for (var i = 0u; i < 8u; i = i + 1u) {
+      if (i >= pointCount) {
+        break;
+      }
+      let light = globals.pointLights[i];
+      let toLight = light.position.xyz - input.worldPosition;
+      let distance = length(toLight);
+      let range = light.position.w;
+      if (distance >= range) {
+        continue;
+      }
+      let direction = toLight / max(distance, 0.0001);
+      let attenuation = pow(clamp(1.0 - distance / range, 0.0, 1.0), 2.0);
+      color += pbrLight(albedo, metallic, roughness, normal, viewDirection, direction) *
+          light.color.rgb * light.color.w * attenuation * ao;
     }
-    let light = globals.pointLights[i];
-    let toLight = light.position.xyz - input.worldPosition;
-    let distance = length(toLight);
-    let range = light.position.w;
-    if (distance >= range) {
-      continue;
+  } else {
+    color = albedo * (globals.ambient.rgb * globals.ambient.a * ao +
+        globals.sun.color.rgb * globals.sun.direction.w * sunNdl * shadow);
+
+    let pointCount = u32(globals.pointParams.x);
+    for (var i = 0u; i < 8u; i = i + 1u) {
+      if (i >= pointCount) {
+        break;
+      }
+      let light = globals.pointLights[i];
+      let toLight = light.position.xyz - input.worldPosition;
+      let distance = length(toLight);
+      let range = light.position.w;
+      if (distance >= range) {
+        continue;
+      }
+      let direction = toLight / max(distance, 0.0001);
+      let ndl = max(dot(normal, direction), 0.0);
+      let attenuation = pow(clamp(1.0 - distance / range, 0.0, 1.0), 2.0);
+      color += albedo * light.color.rgb * light.color.w * ndl * attenuation;
     }
-    let direction = toLight / max(distance, 0.0001);
-    let attenuation = pow(clamp(1.0 - distance / range, 0.0, 1.0), 2.0);
-    color += pbrLight(base.rgb, metallic, roughness, normal, viewDirection, direction) * light.color.rgb * light.color.w * attenuation;
   }
 
-  return FragmentOutput(vec4f(color, base.a), vec4f(normal, 1.0));
+  return FragmentOutput(vec4f(color + emissive, base.a), vec4f(normal, 1.0));
 }

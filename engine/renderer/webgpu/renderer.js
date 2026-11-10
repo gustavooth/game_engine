@@ -14,7 +14,7 @@ const LIGHT_DIRECTIONAL = 0;
 const LIGHT_POINT = 1;
 const SHADOW_CASCADES = 4;
 const GLOBALS_FLOATS = 172;
-const OBJECT_FLOATS = 40;
+const OBJECT_FLOATS = 44;
 
 function shadowSizeForQuality(quality) {
   if (quality <= 0) return 1024;
@@ -131,6 +131,13 @@ class WebGPURenderer {
   frameLayout;
   objectLayout;
   textureLayout;
+  materialLayout;
+  materialSampler;
+  whiteView;
+  flatNormalView;
+  blackView;
+  flatNormalTexture;
+  blackTexture;
   shadowFrameLayout;
   shadowPipelineLayout;
   mainPipelineLayout;
@@ -191,6 +198,24 @@ class WebGPURenderer {
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } }
       ]
     });
+    this.materialLayout = device.createBindGroupLayout({
+      label: "egn-material-layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } }
+      ]
+    });
+    this.materialSampler = device.createSampler({
+      label: "egn-material-sampler",
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "repeat",
+      addressModeV: "repeat",
+      mipmapFilter: "linear"
+    });
     this.shadowFrameLayout = device.createBindGroupLayout({
       label: "egn-shadow-frame-layout",
       entries: [
@@ -198,7 +223,7 @@ class WebGPURenderer {
       ]
     });
     this.mainPipelineLayout = device.createPipelineLayout({
-      bindGroupLayouts: [this.frameLayout, this.objectLayout, this.textureLayout]
+      bindGroupLayouts: [this.frameLayout, this.objectLayout, this.textureLayout, this.materialLayout]
     });
     this.shadowPipelineLayout = device.createPipelineLayout({
       bindGroupLayouts: [this.shadowFrameLayout, this.objectLayout]
@@ -355,24 +380,34 @@ class WebGPURenderer {
     this.cameraGpu.clear();
   }
   createSolidTexture() {
-    const texture = this.device.createTexture({
-      label: "egn-white-texture",
-      size: [1, 1],
-      format: "rgba8unorm",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
-    });
-    this.device.queue.writeTexture({ texture }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
+    const create = (label, rgba) => {
+      const texture = this.device.createTexture({
+        label,
+        size: [1, 1],
+        format: "rgba8unorm",
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+      });
+      this.device.queue.writeTexture({ texture }, new Uint8Array(rgba), { bytesPerRow: 4 }, [1, 1]);
+      return { texture, view: texture.createView() };
+    };
+    const white = create("egn-white-texture", [255, 255, 255, 255]);
+    const flatNormal = create("egn-flat-normal-texture", [128, 128, 255, 255]);
+    const black = create("egn-black-texture", [0, 0, 0, 255]);
     const sampler = this.device.createSampler({ magFilter: "linear", minFilter: "linear" });
-    const view = texture.createView();
+    this.whiteView = white.view;
+    this.flatNormalView = flatNormal.view;
+    this.blackView = black.view;
+    this.flatNormalTexture = flatNormal.texture;
+    this.blackTexture = black.texture;
     this.solidTexture = {
       id: 0,
-      texture,
-      view,
+      texture: white.texture,
+      view: white.view,
       sampler,
       bindGroup: this.device.createBindGroup({
         layout: this.textureLayout,
         entries: [
-          { binding: 0, resource: view },
+          { binding: 0, resource: white.view },
           { binding: 1, resource: sampler }
         ]
       })
@@ -414,6 +449,24 @@ class WebGPURenderer {
     if (id >= 100) this.registerCollisionMesh(id, data);
   }
 
+  materialBindGroup(mesh) {
+    if (!mesh) return null;
+    if (mesh.materialBindGroup) return mesh.materialBindGroup;
+    const ids = mesh.materialTextures ?? {};
+    const view = (id, fallback) => this.textures.get(id)?.view ?? fallback;
+    mesh.materialBindGroup = this.device.createBindGroup({
+      layout: this.materialLayout,
+      entries: [
+        { binding: 0, resource: view(ids.metallicRoughness, this.whiteView) },
+        { binding: 1, resource: view(ids.normal, this.flatNormalView) },
+        { binding: 2, resource: view(ids.occlusion, this.whiteView) },
+        { binding: 3, resource: view(ids.emissive, this.blackView) },
+        { binding: 4, resource: this.materialSampler }
+      ]
+    });
+    return mesh.materialBindGroup;
+  }
+
   registerCollisionMesh(id, data) {
     if (!data?.positions?.length) return;
     const positions = data.positions;
@@ -449,12 +502,35 @@ class WebGPURenderer {
     const parsed = parseGLB(await response.arrayBuffer(), this.math);
     const id = this.nextMeshId++;
     this.registerMesh(id, parsed.data);
-    let textureId;
-    if (parsed.image) {
-      textureId = this.nextTextureId++;
-      await this.registerTextureFromBlob(textureId, parsed.image);
+    const mesh = this.meshes.get(id);
+    const material = parsed.material ?? {};
+    const images = material.images ?? {};
+    const textureIds = {};
+    for (const [key, blob] of Object.entries(images)) {
+      if (!blob) continue;
+      const textureId = this.nextTextureId++;
+      await this.registerTextureFromBlob(textureId, blob);
+      textureIds[key] = textureId;
     }
-    return { id, data: parsed.data, textureId };
+    mesh.defaultTexture = textureIds.baseColor ?? 0;
+    mesh.materialTextures = {
+      metallicRoughness: textureIds.metallicRoughness ?? 0,
+      normal: textureIds.normal ?? 0,
+      occlusion: textureIds.occlusion ?? 0,
+      emissive: textureIds.emissive ?? 0
+    };
+    let flags = 0;
+    if (material.metallicRoughnessTexture) flags |= 1;
+    if (material.normalTexture) flags |= 2;
+    if (material.occlusionTexture) flags |= 4;
+    if (material.emissiveTexture) flags |= 8;
+    mesh.material = {
+      metallic: material.metallic ?? 1,
+      roughness: material.roughness ?? 1,
+      emissive: material.emissive ?? [0, 0, 0, 1],
+      flags
+    };
+    return { id, data: parsed.data, textureId: mesh.defaultTexture };
   }
 
   registerMeshData(data) {
@@ -966,7 +1042,7 @@ class WebGPURenderer {
     return count;
   }
 
-  objectBuffer(item) {
+  objectBuffer(item, mesh = null) {
     let gpu = this.objectGpu.get(item.component);
     if (!gpu) {
       const buffer = this.device.createBuffer({
@@ -999,9 +1075,15 @@ class WebGPURenderer {
       gpu.previousWorld.set(item.world);
     }
     data.set(item.color, 16);
+    const material = mesh?.material;
     data[20] = item.castShadows ? 1 : 0;
-    data[21] = item.metallic ?? 0;
-    data[22] = item.roughness ?? 1;
+    data[21] = material?.metallic ?? item.metallic ?? 0;
+    data[22] = material?.roughness ?? item.roughness ?? 1;
+    data[23] = material?.flags ?? 0;
+    data[40] = material?.emissive?.[0] ?? 0;
+    data[41] = material?.emissive?.[1] ?? 0;
+    data[42] = material?.emissive?.[2] ?? 0;
+    data[43] = material?.emissive?.[3] ?? 1;
     this.device.queue.writeBuffer(gpu.buffer, 0, data);
     return gpu;
   }
@@ -1046,7 +1128,8 @@ class WebGPURenderer {
     data.set(cascades.splits, 96);
     data.set([shadowEnabled ? 1 : 0, cascades.count, 1 / this.shadowSize,
       settings.shadow_softness ?? 1], 100);
-    data.set([pointLights.length, shadowEnabled ? 1 : 0, 0, 0], 104);
+    data.set([pointLights.length, shadowEnabled ? 1 : 0,
+      (settings.pbr_enabled ?? true) ? 1 : 0, 0], 104);
     for (let i = 0; i < pointLights.length && i < 8; i++) {
       const light = pointLights[i];
       data.set([light.world[12], light.world[13], light.world[14], light.range], 108 + i * 8);
@@ -1197,7 +1280,7 @@ class WebGPURenderer {
         }
         this.updateMeshAnimation(mesh, item, animation.buffer);
       }
-      this.objectBuffer(item);
+      this.objectBuffer(item, mesh);
     }
     for (const sprite of scene.sprites) this.objectBuffer(sprite);
     const encoder = this.device.createCommandEncoder({ label: "egn-frame" });
@@ -1276,6 +1359,7 @@ class WebGPURenderer {
         const texture = this.textures.get(item.texture || mesh.defaultTexture) ?? this.solidTexture;
         pass.setBindGroup(1, objectGpu.bindGroup);
         pass.setBindGroup(2, texture.bindGroup);
+        pass.setBindGroup(3, this.materialBindGroup(mesh));
         pass.setVertexBuffer(0, this.animatedGpu.get(item.component)?.buffer ?? mesh.vertexBuffer);
         pass.setIndexBuffer(mesh.indexBuffer, "uint32");
         pass.drawIndexed(mesh.indexCount);
@@ -1379,6 +1463,8 @@ class WebGPURenderer {
     this.depthTexture?.destroy();
     this.hdrTexture?.destroy();
     this.normalTexture?.destroy();
+    this.flatNormalTexture?.destroy();
+    this.blackTexture?.destroy();
     this.postUniformBuffer?.destroy();
     this.shadowTexture?.destroy();
     for (const buffer of this.shadowGlobals) buffer.destroy();

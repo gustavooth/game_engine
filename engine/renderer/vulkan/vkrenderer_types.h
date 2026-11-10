@@ -156,6 +156,20 @@ typedef struct VkRendererTexture {
   b8 used;
 } VkRendererTexture;
 
+typedef struct VkRendererMaterial
+{
+  u32 base_color_texture;
+  u32 metallic_roughness_texture;
+  u32 normal_texture;
+  u32 occlusion_texture;
+  u32 emissive_texture;
+  vec4 base_color_factor;
+  vec4 emissive_factor; // rgb + intensity
+  f32 metallic_factor;
+  f32 roughness_factor;
+  b8 has_pbr_factors;
+} VkRendererMaterial;
+
 typedef struct VkRendererSubMesh
 {
   VkBuffer vertex_buffer;
@@ -163,8 +177,8 @@ typedef struct VkRendererSubMesh
   VkBuffer index_buffer;
   VkDeviceMemory index_memory;
   u32 index_count;
-  u32 texture;
-  vec4 base_color;
+  VkRendererMaterial material;
+  VkDescriptorSet material_set;
 } VkRendererSubMesh;
 
 typedef struct VkRendererMesh
@@ -224,6 +238,10 @@ typedef struct VkContext {
   VkDescriptorSetLayout descriptor_set_layout;
   VkDescriptorPool descriptor_pool;
 
+  // PBR material maps (metallic-roughness, normal, occlusion, emissive).
+  VkDescriptorSetLayout material_set_layout;
+  VkDescriptorPool material_descriptor_pool;
+
   // Skinning: per-frame storage buffer with bone matrices.
   VkDescriptorSetLayout bone_set_layout;
   VkDescriptorPool bone_descriptor_pool;
@@ -261,6 +279,8 @@ typedef struct VkContext {
   VkRendererParticleSystem particle_systems[VKRENDERER_MAX_PARTICLE_SYSTEMS];
 
   VkRendererTexture white_texture;
+  VkRendererTexture black_texture;
+  VkRendererTexture flat_normal_texture;
   VkRendererTexture textures[VKRENDERER_MAX_TEXTURES];
   VkRendererMesh meshes[VKRENDERER_MAX_MESHES];
 

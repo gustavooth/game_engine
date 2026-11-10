@@ -1,5 +1,6 @@
 #include "vkrenderer_mesh.h"
 #include "vkrenderer_buffer.h"
+#include "vkrenderer_descriptor.h"
 #include "renderer/renderer.h"
 #include "renderer/shapes.h"
 #include "core/logger.h"
@@ -10,6 +11,8 @@ static void destroy_submesh(VkContext *ctx, VkRendererSubMesh *submesh)
   if (!submesh)
     return;
 
+  if (submesh->material_set)
+    vkrenderer_material_descriptor_free(ctx, submesh->material_set);
   vkrenderer_buffer_destroy(ctx, &submesh->vertex_buffer, &submesh->vertex_memory);
   vkrenderer_buffer_destroy(ctx, &submesh->index_buffer, &submesh->index_memory);
   MEMOZERO(submesh, sizeof(VkRendererSubMesh));
@@ -32,13 +35,21 @@ static void destroy_mesh_data(VkContext *ctx, VkRendererSubMesh *submeshes,
 b8 vkrenderer_submesh_create(VkContext *ctx,
                              const MeshVertex *vertices, u32 vertex_count,
                              const u32 *indices, u32 index_count,
-                             u32 texture, vec4 base_color,
+                             const VkRendererMaterial *material,
                              VkRendererSubMesh *out_submesh)
 {
   if (!ctx || !vertices || vertex_count == 0 || !out_submesh)
     return false;
 
   MEMOZERO(out_submesh, sizeof(VkRendererSubMesh));
+  if (material)
+    out_submesh->material = *material;
+  else
+  {
+    out_submesh->material.base_color_factor = vec4_one();
+    out_submesh->material.metallic_factor = 0.0f;
+    out_submesh->material.roughness_factor = 1.0f;
+  }
 
   u64 vertex_size = sizeof(MeshVertex) * (u64)vertex_count;
   if (!vkrenderer_buffer_create_device_local(ctx, vertices, vertex_size,
@@ -61,8 +72,12 @@ b8 vkrenderer_submesh_create(VkContext *ctx,
   }
 
   out_submesh->index_count = index_count;
-  out_submesh->texture = texture;
-  out_submesh->base_color = base_color;
+  if (!vkrenderer_material_descriptor_create(ctx, &out_submesh->material,
+                                             &out_submesh->material_set))
+  {
+    destroy_submesh(ctx, out_submesh);
+    return false;
+  }
   return true;
 }
 
@@ -131,8 +146,12 @@ static u32 create_primitive(VkContext *ctx, const MeshVertex *vertices,
   if (!submeshes)
     return 0;
 
+  VkRendererMaterial material = {0};
+  material.base_color_factor = vec4_one();
+  material.roughness_factor = 1.0f;
+
   if (!vkrenderer_submesh_create(ctx, vertices, vertex_count, indices, index_count,
-                                 0, vec4_one(), &submeshes[0]))
+                                 &material, &submeshes[0]))
   {
     MEMOFREE(submeshes);
     return 0;
