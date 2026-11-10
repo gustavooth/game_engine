@@ -460,9 +460,9 @@ mesmos presets. Cada recurso tem um interruptor e uma qualidade independente:
   e velocidade de adaptação.
 
 Presets: `low`, `medium`, `high` (padrão) e `ultra`. A demo usa `ultra`; na RX
-5600 XT o demo em 1280x720 fica acima de 500 fps com VSync desligado, deixando
-folga para 1080p a 75-80 fps. O preset `ultra` usa shadow maps de 4096 px por
-cascata; os demais reduzem resolução, cascatas, amostras e efeitos.
+5600 XT, em 1920x1080 com VSync desligado, o demo mediu cerca de 300 fps nesse
+preset (bem acima da meta de 75-80 fps). O preset `ultra` usa shadow maps de
+4096 px por cascata; os demais reduzem resolução, cascatas, amostras e efeitos.
 
 A configuração é validada como um lote e aplicada no início do próximo frame.
 A engine compara o lote pedido com o ativo e recria somente os recursos afetados
