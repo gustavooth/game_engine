@@ -30,6 +30,17 @@ EGNAPI b8 filemanager_exist(const char *path);
 EGNAPI b8 filemanager_check(const char *path, PathObjectType type);
 
 /**
+ * Resolves a file path for reading. Relative paths are first tried from the
+ * current directory and then from the executable directory.
+ *
+ * @param path Input path.
+ * @param out_path Output buffer.
+ * @param out_size Output buffer size.
+ * @return true if the path exists and is readable.
+ */
+EGNAPI b8 filemanager_resolve_path(const char *path, char *out_path, u64 out_size);
+
+/**
  * @brief Create directory
  *
  * @param path Path to new directory

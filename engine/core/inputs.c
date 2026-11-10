@@ -12,6 +12,8 @@ typedef struct MouseState
 {
   i16 x;
   i16 y;
+  f32 delta_x;
+  f32 delta_y;
   i8 wheel;
   u8 buttons[BUTTON_MAX_BUTTONS];
 } MouseState;
@@ -47,8 +49,13 @@ void inputs_shutdown()
 
 void inputs_update(f64 delta_time)
 {
+  (void)delta_time;
+
   MEMOCPY(&state_ptr->previous_keyboard, &state_ptr->current_keyboard, sizeof(KeyboardState));
   MEMOCPY(&state_ptr->previous_mouse, &state_ptr->current_mouse, sizeof(MouseState));
+
+  state_ptr->current_mouse.delta_x = 0.0f;
+  state_ptr->current_mouse.delta_y = 0.0f;
 }
 
 void inputs_process_key(keys key, b8 pressed)
@@ -72,7 +79,7 @@ void inputs_process_button(Buttons button, b8 pressed)
   if (state_ptr->current_mouse.buttons[button] != pressed)
   {
     // Update internal state_ptr->
-    state_ptr->previous_mouse.buttons[button] = pressed;
+    state_ptr->current_mouse.buttons[button] = pressed;
 
     // Fire the event.
     EventContext context;
@@ -96,6 +103,12 @@ void inputs_process_mouse_move(i16 x, i16 y)
     context.data.u16[1] = y;
     events_fire(EVENT_CODE_MOUSE_MOVED, 0, context);
   }
+}
+
+void inputs_process_mouse_delta(f32 dx, f32 dy)
+{
+  state_ptr->current_mouse.delta_x += dx;
+  state_ptr->current_mouse.delta_y += dy;
 }
 
 void inputs_process_mouse_wheel(i8 z_delta)
@@ -143,12 +156,12 @@ b8 inputs_btn_up(Buttons button)
   return state_ptr->current_mouse.buttons[button] == false;
 }
 
-b8 inputs_was_button_down(Buttons button)
+b8 inputs_was_btn_down(Buttons button)
 {
   return state_ptr->previous_mouse.buttons[button] == true;
 }
 
-b8 inputs_was_button_up(Buttons button)
+b8 inputs_was_btn_up(Buttons button)
 {
   return state_ptr->previous_mouse.buttons[button] == false;
 }
@@ -173,4 +186,10 @@ void inputs_get_previous_mouse_position(i32 *x, i32 *y)
 {
   *x = state_ptr->previous_mouse.x;
   *y = state_ptr->previous_mouse.y;
+}
+
+void inputs_get_mouse_delta(f32 *dx, f32 *dy)
+{
+  *dx = state_ptr->current_mouse.delta_x;
+  *dy = state_ptr->current_mouse.delta_y;
 }

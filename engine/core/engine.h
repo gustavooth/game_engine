@@ -9,6 +9,8 @@ typedef struct EngineSettings
   i32 window_height;
   i32 window_pos_x;
   i32 window_pos_y;
+  b8 vsync;
+  i32 target_fps;
 } EngineSettings;
 
 /**
@@ -75,3 +77,15 @@ EGNAPI b8 engine_get_window_size(void *instance_ptr, i32 *out_width, i32 *out_he
  * @param instance_ptr Engine instance returned by engine_create_instance().
  */
 EGNAPI void engine_destroy_instance(void *instance_ptr);
+
+/** Enables/disables vsync (recreates the swapchain when changed). */
+EGNAPI void engine_set_vsync(void *instance_ptr, b8 vsync);
+EGNAPI b8 engine_get_vsync(void *instance_ptr);
+
+/** Limits the game loop to the given FPS (0 = no explicit limit). */
+EGNAPI void engine_set_target_fps(void *instance_ptr, i32 target_fps);
+EGNAPI i32 engine_get_target_fps(void *instance_ptr);
+
+/** Locks/releases the mouse cursor (real relative pointer lock). */
+EGNAPI void engine_set_pointer_lock(void *instance_ptr, b8 locked);
+EGNAPI b8 engine_is_pointer_locked(void *instance_ptr);

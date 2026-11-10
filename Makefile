@@ -42,7 +42,7 @@ endif
 ifeq ($(PLATFORM),linux)
   PLATFORM_CFLAGS := -fPIC
   PLATFORM_LDFLAGS := -shared
-  PLATFORM_LIBS := -lwayland-client -lvulkan -lm
+  PLATFORM_LIBS := -lwayland-client -lvulkan -lm -lpthread
   PLATFORM_BACKEND := wayland
   PLATFORM_INC :=
   ENGINE_LIB_NAME := libengine.so
@@ -75,13 +75,23 @@ endif
 ifeq ($(origin CC),default)
   CC := clang
 endif
+ifeq ($(origin CXX),default)
+  CXX := g++
+endif
 GLSLANG ?= glslc
+CMAKE ?= $(if $(wildcard third_part/cmake/cmake/data/bin/cmake),third_part/cmake/cmake/data/bin/cmake,cmake)
 V ?= $(if $(wildcard third_part/v/v),third_part/v/v,v)
 V_FLAGS ?=
 
 ENGINE_DIR := engine
 GAME_DIR := game
 THIRD_PARTY_DIR := third_part
+
+JOLTC_DIR := $(THIRD_PARTY_DIR)/JoltC
+JOLT_DIR := $(THIRD_PARTY_DIR)/JoltPhysics
+JOLT_LIBS := $(JOLTC_DIR)/build/lib/libjoltc.a $(JOLTC_DIR)/build/lib/libJolt.a
+JOLT_STAMP := $(JOLTC_DIR)/build/.egn_jolt_built
+JOLT_INC := -I$(JOLTC_DIR)/include
 
 BUILD_DIR := build
 BIN_DIR := bin
@@ -95,7 +105,7 @@ GAME_BIN := $(BIN_DIR)/$(GAME_EXE_NAME)
 
 C_FLAGS := -g -MD -Wall -Werror -Wvarargs -Wno-missing-braces -Werror=vla
 DEFINES := -DEGNEXPORT
-INC_FLAGS := -I$(ENGINE_DIR) -I$(THIRD_PARTY_DIR) $(PLATFORM_INC)
+INC_FLAGS := -I$(ENGINE_DIR) -I$(THIRD_PARTY_DIR) $(JOLT_INC) $(PLATFORM_INC)
 
 # -----------------------------------------------------------------------------
 # Engine sources
@@ -117,8 +127,10 @@ ENGINE_DEP := $(ENGINE_OBJ:.o=.d)
 
 VERT_SRC := $(shell find $(ENGINE_DIR) -name '*.vert')
 FRAG_SRC := $(shell find $(ENGINE_DIR) -name '*.frag')
+COMP_SRC := $(shell find $(ENGINE_DIR) -name '*.comp')
 SPIRV := $(patsubst $(ENGINE_DIR)/%.vert,$(BIN_DIR)/%.vert.spv,$(VERT_SRC)) \
-         $(patsubst $(ENGINE_DIR)/%.frag,$(BIN_DIR)/%.frag.spv,$(FRAG_SRC))
+         $(patsubst $(ENGINE_DIR)/%.frag,$(BIN_DIR)/%.frag.spv,$(FRAG_SRC)) \
+         $(patsubst $(ENGINE_DIR)/%.comp,$(BIN_DIR)/%.comp.spv,$(COMP_SRC))
 
 # -----------------------------------------------------------------------------
 # Game sources
@@ -140,7 +152,7 @@ V_PATH := $(abspath $(GAME_DIR)/..)|@vlib|@vmodules
 # Targets
 # -----------------------------------------------------------------------------
 
-.PHONY: all build engine game run clean v help
+.PHONY: all build engine game run clean v jolt help
 
 all: engine game
 
@@ -150,12 +162,12 @@ engine: $(ENGINE_LIB) $(SPIRV)
 
 game: $(GAME_BIN)
 
-$(ENGINE_LIB): $(ENGINE_OBJ)
+$(ENGINE_LIB): $(ENGINE_OBJ) $(JOLT_LIBS)
 	@echo "  LD   $@"
 	@$(MKDIR) $(dir $@)
-	@$(CC) $(PLATFORM_LDFLAGS) $(ENGINE_OBJ) $(PLATFORM_LIBS) -o $@
+	@$(CXX) $(PLATFORM_LDFLAGS) $(ENGINE_OBJ) $(JOLT_LIBS) $(PLATFORM_LIBS) -o $@
 
-$(BUILD_DIR)/$(ENGINE_DIR)/%.o: $(ENGINE_DIR)/%.c
+$(BUILD_DIR)/$(ENGINE_DIR)/%.o: $(ENGINE_DIR)/%.c | $(JOLT_STAMP)
 	@echo "  CC   $<"
 	@$(MKDIR) $(dir $@)
 	@$(CC) $(C_FLAGS) $(PLATFORM_CFLAGS) $(DEFINES) $(INC_FLAGS) -c $< -o $@
@@ -164,6 +176,17 @@ $(BIN_DIR)/%.spv: $(ENGINE_DIR)/%
 	@echo "  SPV  $<"
 	@$(MKDIR) $(dir $@)
 	@$(GLSLANG) $< -o $@
+
+$(BIN_DIR)/%.comp.spv: $(ENGINE_DIR)/%.comp
+	@echo "  SPV  $<"
+	@$(MKDIR) $(dir $@)
+	@$(GLSLANG) $< -o $@
+
+$(JOLT_LIBS): $(JOLT_STAMP)
+	@if [ ! -f "$@" ]; then $(MAKE) jolt; fi
+
+$(JOLT_STAMP):
+	@$(MAKE) jolt
 
 $(GAME_BIN): $(GAME_V_SRC) $(SDK_V_SRC) $(GAME_MANIFEST) $(SDK_MANIFEST) $(GAME_ASSETS)
 	@if [ ! -f $(ENGINE_LIB) ]; then \
@@ -194,6 +217,35 @@ v:
 		echo "V already built at third_part/v/v"; \
 	fi
 
+jolt:
+	@if [ ! -d $(JOLTC_DIR) ]; then \
+		git clone --depth 1 https://github.com/jrouwe/JoltC $(JOLTC_DIR); \
+	fi
+	@if [ ! -d $(JOLT_DIR) ]; then \
+		git clone --depth 1 --branch v5.3.0 https://github.com/jrouwe/JoltPhysics $(JOLT_DIR); \
+	fi
+	@if [ -d $(JOLT_DIR)/.git ]; then \
+		git -C $(JOLT_DIR) fetch --depth 1 origin tag v5.3.0 >/dev/null 2>&1 || true; \
+		git -C $(JOLT_DIR) checkout v5.3.0 >/dev/null 2>&1 || true; \
+	fi
+	@if [ ! -x "$(CMAKE)" ] && ! command -v "$(CMAKE)" >/dev/null 2>&1; then \
+		echo "error: CMake not found. Install cmake or run: make CMAKE=/path/to/cmake jolt"; \
+		exit 1; \
+	fi
+	@echo "  JOLT configuring"
+	@rm -rf $(JOLTC_DIR)/build
+	@$(CMAKE) -S $(JOLTC_DIR) -B $(JOLTC_DIR)/build \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DJPH_SAMPLES=OFF -DJPH_BUILD_SHARED=OFF \
+		-DJPH_USE_VK=OFF -DJPH_USE_DX12=OFF -DJPH_USE_MTL=OFF -DJPH_USE_CPU_COMPUTE=ON \
+		-DENABLE_ALL_WARNINGS=OFF \
+		-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF \
+		-DPROFILER_IN_DEBUG_AND_RELEASE=OFF \
+		-DDEBUG_RENDERER_IN_DISTRIBUTION=OFF
+	@echo "  JOLT building"
+	@$(CMAKE) --build $(JOLTC_DIR)/build -j$$(nproc)
+	@touch $(JOLT_STAMP)
+
 help:
 	@echo "EGN build targets:"
 	@echo "  make / make all   build engine + game"
@@ -203,10 +255,11 @@ help:
 	@echo "  make run          build everything and run the game"
 	@echo "  make clean        remove build/ and bin/"
 	@echo "  make v            clone/build V in third_part/v"
+	@echo "  make jolt         clone/build JoltC + Jolt in third_part/"
 	@echo "  make help         show this help"
 	@echo ""
 	@echo "Variables:"
-	@echo "  PLATFORM=$(PLATFORM)  CC=$(CC)  V=$(V)"
+	@echo "  PLATFORM=$(PLATFORM)  CC=$(CC)  CXX=$(CXX)  V=$(V)"
 	@echo "  Override: make PLATFORM=linux CC=clang V=/path/to/v"
 
 -include $(ENGINE_DEP)

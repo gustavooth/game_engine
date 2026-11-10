@@ -111,7 +111,55 @@ pub fn (e &Engine) mesh_sphere() Mesh {
 	}
 }
 
+// load_obj loads a Wavefront OBJ (with its MTL materials/textures).
+pub fn (e &Engine) load_obj(path string) !Mesh {
+	id := C.renderer_mesh_load_obj(path.str)
+	if id == 0 {
+		return error('failed to load OBJ: ${path}')
+	}
+	return Mesh{
+		id: id
+	}
+}
+
+// load_glb loads a binary glTF (.glb) mesh, including skeleton/animations.
+pub fn (e &Engine) load_glb(path string) !Mesh {
+	id := C.renderer_mesh_load_glb(path.str)
+	if id == 0 {
+		return error('failed to load GLB: ${path}')
+	}
+	return Mesh{
+		id: id
+	}
+}
+
 // screenshot requests a PNG of the next rendered frame.
 pub fn (e &Engine) screenshot(path string) bool {
 	return C.renderer_screenshot(path.str)
+}
+
+// animation_count returns the number of clips in a GLB mesh (0 for OBJ and
+// primitives).
+pub fn (m Mesh) animation_count() u32 {
+	if m.id == 0 {
+		return 0
+	}
+	return C.renderer_mesh_animation_count(m.id)
+}
+
+// animation_name returns the name of a GLB clip, or an empty string.
+pub fn (m Mesh) animation_name(index u32) string {
+	ptr := C.renderer_mesh_animation_name(m.id, index)
+	if ptr == 0 {
+		return ''
+	}
+	return unsafe { cstring_to_vstring(ptr) }
+}
+
+// animation_duration returns the duration of a GLB clip in seconds.
+pub fn (m Mesh) animation_duration(index u32) f32 {
+	if m.id == 0 {
+		return 0.0
+	}
+	return C.renderer_mesh_animation_duration(m.id, index)
 }

@@ -11,6 +11,9 @@
 #include "vkrenderer_buffer.h"
 #include "vkrenderer_descriptor.h"
 #include "vkrenderer_scene.h"
+#include "vkrenderer_skin.h"
+#include "vkrenderer_lighting.h"
+#include "vkrenderer_particles.h"
 #include "vkrenderer_mesh.h"
 #include "vkrenderer_texture.h"
 #include "vkrenderer_screenshot.h"
@@ -56,10 +59,12 @@ static b8 create_render_pipelines(void)
   binding_3d.stride = sizeof(MeshVertex);
   binding_3d.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-  VkVertexInputAttributeDescription attributes_3d[3] = {
+  VkVertexInputAttributeDescription attributes_3d[5] = {
       {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshVertex, position)},
       {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshVertex, normal)},
       {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(MeshVertex, uv)},
+      {3, 0, VK_FORMAT_R16G16B16A16_UINT, offsetof(MeshVertex, joints)},
+      {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(MeshVertex, weights)},
   };
 
   VkRendererShaderParams params_3d = {0};
@@ -67,13 +72,22 @@ static b8 create_render_pipelines(void)
   params_3d.frag_path = "shaders/3d.frag.spv";
   params_3d.binding = &binding_3d;
   params_3d.attributes = attributes_3d;
-  params_3d.attribute_count = 3;
-  params_3d.push_constant_size = 128; // mat4 + mat3 + vec4
+  params_3d.attribute_count = 5;
+  params_3d.push_constant_size = 148; // mat4 mvp + mat4 model + vec4 tint + uint
+
+  VkDescriptorSetLayout model_set_layouts[3] = {
+      ctx.descriptor_set_layout,
+      vkrenderer_skin_set_layout(&ctx),
+      vkrenderer_lighting_set_layout(&ctx),
+  };
+  params_3d.set_layouts = model_set_layouts;
+  params_3d.set_layout_count = 3;
   params_3d.depth_test = true;
   params_3d.depth_write = true;
   params_3d.blending = true;
   params_3d.cull_mode = VK_CULL_MODE_NONE;
   params_3d.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  params_3d.color_attachment_count = 1;
 
   if (!vkrenderer_shader_create(&ctx, &params_3d, &ctx.shader_3d))
     return false;
@@ -83,21 +97,42 @@ static b8 create_render_pipelines(void)
   params_sprite.frag_path = "shaders/sprite.frag.spv";
   params_sprite.binding = &binding_3d;
   params_sprite.attributes = attributes_3d;
-  params_sprite.attribute_count = 3;
-  params_sprite.push_constant_size = 128; // mat4 + mat3 + vec4
+  params_sprite.attribute_count = 5;
+  params_sprite.push_constant_size = 148; // mat4 mvp + mat4 model + vec4 tint + uint
   params_sprite.depth_test = true;
   params_sprite.depth_write = true;
   params_sprite.blending = true;
   params_sprite.cull_mode = VK_CULL_MODE_NONE;
   params_sprite.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  params_sprite.color_attachment_count = 1;
 
   if (!vkrenderer_shader_create(&ctx, &params_sprite, &ctx.shader_sprite))
+    return false;
+
+  VkRendererShaderParams params_shadow = {0};
+  params_shadow.vert_path = "shaders/shadow.vert.spv";
+  params_shadow.frag_path = "shaders/shadow.frag.spv";
+  params_shadow.binding = &binding_3d;
+  params_shadow.attributes = attributes_3d;
+  params_shadow.attribute_count = 5;
+  params_shadow.set_layouts = &ctx.bone_set_layout;
+  params_shadow.set_layout_count = 1;
+  params_shadow.push_constant_size = 68; // mat4 mvp + uint bone_offset
+  params_shadow.depth_test = true;
+  params_shadow.depth_write = true;
+  params_shadow.blending = false;
+  params_shadow.cull_mode = VK_CULL_MODE_NONE;
+  params_shadow.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  params_shadow.render_pass = vkrenderer_lighting_shadow_renderpass(&ctx);
+  params_shadow.color_attachment_count = 0;
+
+  if (!vkrenderer_shader_create(&ctx, &params_shadow, &ctx.shadow_shader))
     return false;
 
   return true;
 }
 
-b8 renderer_initialize(Window *win, u32 width, u32 height)
+b8 renderer_initialize(Window *win, u32 width, u32 height, b8 vsync)
 {
   EGNDEBUG("VKRENDERER initializing...")
 
@@ -105,6 +140,7 @@ b8 renderer_initialize(Window *win, u32 width, u32 height)
   ctx.find_memory_index = find_memory_index;
   ctx.framebuffer_width = width;
   ctx.framebuffer_height = height;
+  ctx.vsync = vsync;
 
   if (!create_instance())
     return false;
@@ -126,11 +162,29 @@ b8 renderer_initialize(Window *win, u32 width, u32 height)
   if (!vkrenderer_descriptors_create(&ctx))
     return false;
 
+  if (!vkrenderer_skin_create(&ctx))
+    return false;
+
+  if (!vkrenderer_lighting_create(&ctx))
+    return false;
+
+  if (ctx.device.properties.limits.maxPushConstantsSize < 148)
+  {
+    EGNERROR("VKRENDERER device does not support 148 bytes of push constants");
+    return false;
+  }
+
   if (!create_render_pipelines())
     return false;
 
   if (!vkrenderer_texture_create_solid(&ctx, 255, 255, 255, 255, &ctx.white_texture))
     return false;
+
+  if (!vkrenderer_particles_create(&ctx))
+  {
+    EGNERROR("VKRENDERER failed to create the particle pipelines");
+    return false;
+  }
 
   ctx.cube_mesh = vkrenderer_mesh_create_cube(&ctx);
   ctx.sphere_mesh = vkrenderer_mesh_create_sphere(&ctx, 32, 16);
@@ -150,6 +204,7 @@ void renderer_shutdown()
 {
   vkDeviceWaitIdle(ctx.device.handle);
 
+  vkrenderer_scene_shutdown(&ctx);
   vkrenderer_screenshot_shutdown(&ctx);
 
   vkrenderer_mesh_destroy(&ctx, ctx.cube_mesh);
@@ -169,7 +224,11 @@ void renderer_shutdown()
 
   vkrenderer_shader_destroy(&ctx, &ctx.shader_3d);
   vkrenderer_shader_destroy(&ctx, &ctx.shader_sprite);
+  vkrenderer_shader_destroy(&ctx, &ctx.shadow_shader);
 
+  vkrenderer_particles_destroy(&ctx);
+  vkrenderer_lighting_destroy(&ctx);
+  vkrenderer_skin_destroy(&ctx);
   vkrenderer_descriptors_destroy(&ctx);
   vkrenderer_renderpass_destroy(&ctx, &ctx.main_renderpass);
 
@@ -184,6 +243,15 @@ void renderer_shutdown()
   vkDestroyInstance(ctx.instance, ctx.allocator);
 }
 
+void renderer_set_vsync(b8 vsync)
+{
+  if (ctx.vsync == vsync)
+    return;
+
+  ctx.vsync = vsync;
+  renderer_resize(ctx.framebuffer_width, ctx.framebuffer_height);
+}
+
 void renderer_resize(u32 width, u32 height)
 {
   cached_framebuffer_width = width;
@@ -195,12 +263,13 @@ void renderer_resize(u32 width, u32 height)
 
 b8 renderer_draw_frame(RenderPacket packet)
 {
-  (void)packet;
-
   if (!begin_frame())
     return false;
 
   VkRendererCommandBuffer *command_buffer = &ctx.graphics_command_buffers[ctx.image_index];
+
+  if (vkrenderer_scene_prepare(&ctx, command_buffer, packet.delta_time))
+    vkrenderer_scene_render_shadows(&ctx, command_buffer);
 
   vkrenderer_renderpass_begin(command_buffer, &ctx.main_renderpass,
                               ctx.framebuffers[ctx.image_index].handle);

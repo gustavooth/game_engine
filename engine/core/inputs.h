@@ -164,9 +164,11 @@ EGNAPI b8 inputs_was_btn_up(Buttons button);
 
 EGNAPI void inputs_get_mouse_pos(i32 *x, i32 *y);
 EGNAPI void inputs_get_prev_mouse_pos(i32 *x, i32 *y);
+EGNAPI void inputs_get_mouse_delta(f32 *dx, f32 *dy);
 EGNAPI i16 inputs_mouse_wheel();
 EGNAPI i16 inputs_prev_mouse_wheel();
 
 void inputs_process_button(Buttons button, b8 pressed);
 void inputs_process_mouse_move(i16 x, i16 y);
+void inputs_process_mouse_delta(f32 dx, f32 dy);
 void inputs_process_mouse_wheel(i8 z_delta);

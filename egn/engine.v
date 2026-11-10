@@ -20,11 +20,13 @@ module egn
 
 pub struct Settings {
 pub mut:
-	title  string = 'EGN Game'
-	width  int    = 1280
-	height int    = 720
-	x      int    = 100
-	y      int    = 100
+	title      string = 'EGN Game'
+	width      int    = 1280
+	height     int    = 720
+	x          int    = 100
+	y          int    = 100
+	vsync      bool   = true
+	target_fps int
 }
 
 pub struct Engine {
@@ -46,6 +48,8 @@ pub fn create(settings Settings) !Engine {
 		window_height: settings.height
 		window_pos_x:  settings.x
 		window_pos_y:  settings.y
+		vsync:         settings.vsync
+		target_fps:    settings.target_fps
 	}
 
 	mut handle := voidptr(0)
@@ -92,6 +96,27 @@ pub fn (mut e Engine) destroy() {
 	}
 }
 
+// set_vsync enables/disables vertical sync. Changing it recreates the
+// swapchain on the next frame.
+pub fn (e &Engine) set_vsync(vsync bool) {
+	C.engine_set_vsync(e.handle, vsync)
+}
+
+// vsync reports whether vertical sync is enabled.
+pub fn (e &Engine) vsync() bool {
+	return C.engine_get_vsync(e.handle)
+}
+
+// set_target_fps limits the game loop to the given FPS (0 disables the cap).
+pub fn (e &Engine) set_target_fps(target_fps int) {
+	C.engine_set_target_fps(e.handle, i32(target_fps))
+}
+
+// target_fps returns the current frame-rate cap (0 = no cap).
+pub fn (e &Engine) target_fps() int {
+	return int(C.engine_get_target_fps(e.handle))
+}
+
 // delta_time returns the duration of the last frame, in seconds.
 pub fn (e &Engine) delta_time() f64 {
 	return C.engine_get_delta_time(e.handle)
@@ -133,12 +158,12 @@ pub fn (e &Engine) key_up(key Key) bool {
 
 // key_pressed is true only on the frame the key went down.
 pub fn (e &Engine) key_pressed(key Key) bool {
-	return C.inputs_was_key_down(int(key))
+	return C.inputs_key_down(int(key)) && !C.inputs_was_key_down(int(key))
 }
 
 // key_released is true only on the frame the key went up.
 pub fn (e &Engine) key_released(key Key) bool {
-	return C.inputs_was_key_up(int(key))
+	return C.inputs_key_up(int(key)) && !C.inputs_was_key_up(int(key))
 }
 
 // ---------------------------------------------------------------------------
@@ -154,11 +179,11 @@ pub fn (e &Engine) mouse_up(button MouseButton) bool {
 }
 
 pub fn (e &Engine) mouse_pressed(button MouseButton) bool {
-	return C.inputs_was_btn_down(int(button))
+	return C.inputs_btn_down(int(button)) && !C.inputs_was_btn_down(int(button))
 }
 
 pub fn (e &Engine) mouse_released(button MouseButton) bool {
-	return C.inputs_was_btn_up(int(button))
+	return C.inputs_btn_up(int(button)) && !C.inputs_was_btn_up(int(button))
 }
 
 // mouse_position returns the current mouse position in window coordinates.
@@ -180,6 +205,26 @@ pub fn (e &Engine) mouse_previous_position() (int, int) {
 // mouse_wheel returns the wheel delta of the current frame.
 pub fn (e &Engine) mouse_wheel() i16 {
 	return C.inputs_mouse_wheel()
+}
+
+// mouse_delta returns the relative motion accumulated in the last frame.
+// Use it for FPS camera look while the pointer is locked.
+pub fn (e &Engine) mouse_delta() (f32, f32) {
+	mut dx := f32(0)
+	mut dy := f32(0)
+	C.inputs_get_mouse_delta(&dx, &dy)
+	return dx, dy
+}
+
+// set_pointer_lock locks/releases the mouse cursor. While locked the cursor
+// is hidden and mouse_delta reports unrestricted relative motion.
+pub fn (e &Engine) set_pointer_lock(locked bool) {
+	C.engine_set_pointer_lock(e.handle, locked)
+}
+
+// pointer_locked reports whether the pointer lock is currently active.
+pub fn (e &Engine) pointer_locked() bool {
+	return C.engine_is_pointer_locked(e.handle)
 }
 
 // mouse_previous_wheel returns the wheel delta of the previous frame.

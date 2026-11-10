@@ -34,8 +34,16 @@ b8 vkrenderer_shader_create(VkContext *ctx, const VkRendererShaderParams *params
   push_range.size = params->push_constant_size;
 
   VkPipelineLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-  layout_info.setLayoutCount = 1;
-  layout_info.pSetLayouts = &ctx->descriptor_set_layout;
+  if (params->set_layouts && params->set_layout_count > 0)
+  {
+    layout_info.setLayoutCount = params->set_layout_count;
+    layout_info.pSetLayouts = params->set_layouts;
+  }
+  else
+  {
+    layout_info.setLayoutCount = 1;
+    layout_info.pSetLayouts = &ctx->descriptor_set_layout;
+  }
   if (params->push_constant_size > 0)
   {
     layout_info.pushConstantRangeCount = 1;
@@ -106,8 +114,8 @@ b8 vkrenderer_shader_create(VkContext *ctx, const VkRendererShaderParams *params
 
   VkPipelineColorBlendStateCreateInfo color_blending = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
   color_blending.logicOpEnable = VK_FALSE;
-  color_blending.attachmentCount = 1;
-  color_blending.pAttachments = &color_attachment;
+  color_blending.attachmentCount = params->color_attachment_count;
+  color_blending.pAttachments = params->color_attachment_count > 0 ? &color_attachment : 0;
 
   VkDynamicState dynamic_states[2] = {
       VK_DYNAMIC_STATE_VIEWPORT,
@@ -129,7 +137,7 @@ b8 vkrenderer_shader_create(VkContext *ctx, const VkRendererShaderParams *params
   pipeline_info.pColorBlendState = &color_blending;
   pipeline_info.pDynamicState = &dynamic_state;
   pipeline_info.layout = dest_shader->pipeline.layout;
-  pipeline_info.renderPass = ctx->main_renderpass.handle;
+  pipeline_info.renderPass = params->render_pass ? params->render_pass : ctx->main_renderpass.handle;
   pipeline_info.subpass = 0;
   pipeline_info.basePipelineHandle = 0;
   pipeline_info.basePipelineIndex = -1;

@@ -7,8 +7,9 @@ layout(location = 2) in vec2 in_uv;
 layout(push_constant) uniform PushConstants
 {
   mat4 mvp;
-  mat3 normal_matrix;
+  mat4 model;
   vec4 tint;
+  uint bone_offset;
 } pc;
 
 layout(location = 0) out vec2 v_uv;

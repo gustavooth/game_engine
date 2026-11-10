@@ -44,6 +44,11 @@ typedef struct EgnModelData
   f32 g;
   f32 b;
   f32 a;
+  b8 cast_shadows;
+
+  // Renderer-owned per-instance animation state and current bone slot.
+  void *anim_state;
+  u32 bone_offset;
 } EgnModelData;
 
 typedef struct EgnSpriteData
@@ -59,6 +64,80 @@ typedef struct EgnSpriteData
   f32 a;
 } EgnSpriteData;
 
+typedef struct EgnAnimationData
+{
+  i32 clip;
+  f32 time;
+  f32 speed;
+  b8 loop;
+  b8 playing;
+} EgnAnimationData;
+
+typedef struct EgnLightData
+{
+  i32 light_type;
+  f32 r;
+  f32 g;
+  f32 b;
+  f32 intensity;
+  f32 range;
+  b8 cast_shadows;
+} EgnLightData;
+
+typedef struct EgnRigidbodyData
+{
+  i32 motion_type;
+  b8 is_2d;
+  f32 gravity_factor;
+  f32 mass;
+  f32 friction;
+  f32 restitution;
+  f32 linear_damping;
+  f32 angular_damping;
+} EgnRigidbodyData;
+
+typedef struct EgnParticleData
+{
+  u32 max_particles;
+  u32 texture;
+  f32 spawn_rate;
+  f32 lifetime;
+  f32 speed;
+  f32 speed_variation;
+  f32 gravity;
+  f32 drag;
+  f32 spread;
+  f32 radius;
+  vec3 direction;
+  f32 size_start;
+  f32 size_end;
+  f32 size_scale;
+  f32 fade_in;
+  f32 fade_out;
+  vec4 color_start;
+  vec4 color_end;
+  u32 system;
+  f32 burst;
+} EgnParticleData;
+
+typedef struct EgnColliderData
+{
+  i32 shape_type;
+  f32 size_x;
+  f32 size_y;
+  f32 size_z;
+  f32 radius;
+  u32 mesh;
+  f32 offset_x;
+  f32 offset_y;
+  f32 offset_z;
+
+  // Physics-owned body state.
+  u32 body_id;
+  b8 body_created;
+  b8 dirty;
+} EgnColliderData;
+
 typedef struct EgnComponent
 {
   u32 magic;
@@ -71,6 +150,11 @@ typedef struct EgnComponent
     EgnCameraData camera;
     EgnModelData model;
     EgnSpriteData sprite;
+    EgnAnimationData animation;
+    EgnLightData light;
+    EgnRigidbodyData rigidbody;
+    EgnColliderData collider;
+    EgnParticleData particles;
   } data;
   struct EgnComponent *next;
 } EgnComponent;

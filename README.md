@@ -5,14 +5,24 @@ do módulo **EGN** (`egn/`).
 
 ## 🚧 Em desenvolvimento
 
-- **Etapa 1 (concluída):** renderização 3D com Vulkan, texturas, iluminação,
-  câmera perspectiva/ortográfica e primitivas com cor sólida.
-- **Sistema de cena (concluído):** objeto/cena com hierarquia, transforms
-  acumulados, quaternion + helpers Euler, layers, componentes `Camera`, `Model`
-  e `Sprite`, múltiplas câmeras com viewport normalizado e clear por câmera.
-- **Etapa 2 (pendente):** carregamento de `.obj` (geometria + `.mtl` básico).
-- **Etapa 3 (pendente):** integração do `.obj` ao componente `Model` e demo de
-  um modelo girando.
+- **Etapa 1 (concluída):** renderização 3D com Vulkan, texturas, câmera
+  perspectiva/ortográfica e primitivas.
+- **Sistema de cena (concluído):** hierarquia, transforms acumulados,
+  quaternion + helpers Euler, layers, múltiplas câmeras com viewport e clear
+  por câmera, e componentes `Camera`, `Model`, `Sprite`, `Animation`, `Light`,
+  `Rigidbody`, `Collider` e `Particles`.
+- **Etapa 2/3 (concluída):** carregamento de `.obj` multi-material (submeshes +
+  `map_Kd`) e `.glb`/glTF binário com skeleton, skinning GPU e clips de
+  animação.
+- **Iluminação:** sol direcional com shadow map, luzes pontuais e luz ambiente.
+- **Física:** Jolt Physics via JoltC: rigidbodies 2D/3D, colisores box, esfera
+  e malha (inclusive malha dinâmica), com timestep fixo.
+- **Partículas:** simulação em compute shader na GPU e renderização de
+  billboards com textura, cor/tamanho ao longo da vida, gravidade e drag.
+- **Rede:** TCP e UDP, servidores, clientes e host (servidor + cliente local),
+  com fila de eventos e mensagens com tamanho prefixado no TCP.
+- **Demo:** personagem Fox animado, chão, física, partículas, luzes, câmera FPS
+  com pointer lock real no Wayland, rede em localhost e captura de tela.
 
 ## Arquitetura
 
@@ -52,7 +62,7 @@ jogo rode a milhares de FPS e sobrecarregue a GPU/desktop.
 Linux/Wayland:
 
 ```sh
-sudo apt install clang make libwayland-dev libvulkan-dev glslc
+sudo apt install clang g++ make libwayland-dev libvulkan-dev glslc
 ```
 
 Opcional (habilita a camada de validação do Vulkan em desenvolvimento):
@@ -60,6 +70,18 @@ Opcional (habilita a camada de validação do Vulkan em desenvolvimento):
 ```sh
 sudo apt install vulkan-validationlayers
 ```
+
+A física usa JoltC/Jolt (MIT). O Makefile baixa e compila as dependências na
+primeira vez:
+
+```sh
+make jolt
+```
+
+É necessário CMake. O Makefile procura `third_part/cmake` (instalado pelo
+próprio projeto), depois `cmake` do `PATH`. Os protocolos Wayland de pointer
+lock (`pointer-constraints` e `relative-pointer`) já estão vendorizados em
+`engine/platform/linux/protocols`; não é preciso instalar `wayland-protocols`.
 
 Compilador V (0.5+): <https://vlang.io>
 
@@ -348,3 +370,39 @@ egn/
 
 Detalhes para adicionar novas funções da engine ao módulo estão em
 [`egn/README.md`](egn/README.md).
+
+
+## Demo e controles
+
+O jogo em `game/main.v` demonstra a engine completa:
+
+- chão texturizado com colisão estática;
+- Fox do Khronos com skeleton e animação `Walk`;
+- caixas, esfera, corpo 2D e um OBJ com colisor de malha dinâmico;
+- sol com sombras, luzes pontuais, fogo e cristal com partículas na GPU;
+- câmera FPS com mouse travado de verdade no Wayland.
+
+Controles:
+
+| Tecla | Ação |
+| --- | --- |
+| `WASD` | andar |
+| `Space` / `Ctrl` | subir / descer |
+| `Shift` | correr |
+| mouse | olhar (clique captura o ponteiro) |
+| `Esc` | libera o ponteiro |
+| `Q` | encerra |
+| `F1` | alterna vsync |
+| `F2` | alterna limite de FPS (off/60/120/144) |
+| `F12` | salva `screenshot.png` |
+
+No boot o demo faz um smoke test de rede TCP e UDP em localhost e imprime o
+resultado no log.
+
+## Assets de terceiros
+
+`game/assets/models/fox.glb` é o modelo Fox do Khronos glTF Sample Models:
+- low poly fox por PixelMannen (CC0);
+- rigging/animação por @tomkranis (CC BY 4.0).
+
+Consulte `game/assets/models/LICENSE_FOX.md`.

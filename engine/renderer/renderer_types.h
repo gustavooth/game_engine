@@ -19,4 +19,6 @@ typedef struct MeshVertex
   vec3 position;
   vec3 normal;
   vec2 uv;
+  u16 joints[4];
+  f32 weights[4];
 } MeshVertex;

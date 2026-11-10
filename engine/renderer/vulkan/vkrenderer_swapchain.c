@@ -91,9 +91,19 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
     out_swapchain->image_format = support.formats[0];
   }
 
-  // FIFO (vsync) keeps the game in sync with the display and prevents the
-  // unbounded frame rate that MAILBOX can produce on fast GPUs.
   VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
+  if (!ctx->vsync)
+  {
+    present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    for (u32 i = 0; i < support.present_mode_count; i++)
+    {
+      if (support.present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+      {
+        present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+        break;
+      }
+    }
+  }
 
   VkExtent2D min = support.capabilities.minImageExtent;
   VkExtent2D max = support.capabilities.maxImageExtent;
@@ -118,6 +128,8 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
   swapchain_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
   if (support.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
     swapchain_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+  if (support.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+    swapchain_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
   if (ctx->device.queue_indexes.graphics_family_index != ctx->device.queue_indexes.present_family_index)
   {

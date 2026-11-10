@@ -13,9 +13,14 @@ diretamente.
   - `-Wl,-rpath,'$ORIGIN'`: o executável encontra a biblioteca ao lado dele.
 - `engine.v` expõe `Engine`, `Settings`, loop, input e `app.scene()`.
 - `scene.v` expõe o grafo de cena: `Object`, `Camera`, `Model`, `Sprite`,
-  hierarquia, transforms, layers e componentes.
+  `Animation`, `Light`, `Rigidbody`, `Collider`, `Particles`, hierarquia,
+  transforms e layers.
 - `render.v` expõe `Projection`, `Viewport`, `Color`, `Texture`, `Mesh`,
-  `load_texture`, `mesh_cube`, `mesh_sphere` e `screenshot`.
+  `load_texture`, `load_obj`, `load_glb`, `mesh_cube`, `mesh_sphere` e
+  `screenshot`.
+- `network.v` expõe `Server`, `Client` e `Host` para TCP/UDP não-bloqueante.
+- `engine.v` expõe `Settings.vsync/target_fps`, `set_vsync`, `set_target_fps`,
+  `set_pointer_lock`, `pointer_locked` e `mouse_delta`.
 - `math.v` define `Vec2`, `Vec3`, `Vec4`, `Quat` e helpers de Euler.
 - A engine roda um frame por chamada de `frame()`; o loop pertence ao jogo.
 
@@ -289,3 +294,62 @@ As flags de link específicas de plataforma usam a sintaxe do V:
 O código V do módulo `egn` é o mesmo em todas as plataformas. As implementações
 de janela/superfície continuam em `engine/platform/<os>` e
 `engine/renderer/vulkan/platform/`.
+
+
+## Componentes novos
+
+```v
+// Personagem animado (.glb com skeleton + clips).
+fox.add_component(Model{ mesh: app.load_glb('assets/models/fox.glb')! })
+fox.add_component(Animation{ clip: 1, speed: 1.2, loop: true })
+
+// Física Jolt.
+box.add_component(Rigidbody{ motion_type: .dynamic, mass: 1.0 })
+box.add_component(Collider{ shape: .box, size: vec3(1, 1, 1) })
+
+// Colisor de malha (inclusive em corpo dinâmico).
+obj.add_component(Collider{ shape: .mesh, mesh: app.load_obj('assets/models/box.obj')! })
+
+// Partículas na GPU.
+node.add_component(Particles{
+    max_particles: 512
+    texture: particle_texture
+    spawn_rate: 80
+    lifetime: 1.4
+    speed: 1.5
+    gravity: 1.2
+    color_start: rgba(1.0, 0.8, 0.2, 1.0)
+    color_end: rgba(1.0, 0.1, 0.0, 0.0)
+})
+```
+
+Use `motion_type: .kinematic` para objetos controlados pelo jogo, `.static`
+para chão/paredes e `is_2d: true` no `Rigidbody` para restringir o movimento ao
+plano XY. Colisores `box`/`sphere` funcionam em 2D e 3D; `mesh` usa os dados
+triangulados do asset carregado.
+
+## Rede
+
+```v
+import egn { server_create, client_create, log_info }
+
+mut server := server_create(9000, false)! // false = TCP, true = UDP
+mut client := client_create('127.0.0.1', 9000, false)!
+
+for app.should_run() {
+    server.poll()
+    client.poll()
+    for {
+        event := server.poll_event() or { break }
+        if event.event_type == .message {
+            log_info('recebi: ${event.message()}')
+            server.send_text(event.client_id, 'pong')
+        }
+    }
+    app.frame()
+}
+```
+
+Mensagens TCP têm tamanho prefixado automaticamente; UDP preserva datagramas.
+`Host` combina um servidor e um cliente conectado a `127.0.0.1` no mesmo
+processo, útil para testes e modos single-player com servidor local.

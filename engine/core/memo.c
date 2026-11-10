@@ -12,7 +12,8 @@ static const char *MemoryTagStrings[MEMO_TAG_MAX_TAGS] = {
     "WINDOW             ",
     "RENDERER           ",
     "FILE               ",
-    "SCENE              "};
+    "SCENE              ",
+    "ASSET              "};
 
 typedef struct MemoryData
 {

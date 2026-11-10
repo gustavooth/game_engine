@@ -12,6 +12,7 @@ module egn
 #include "core/inputs.h"
 #include "renderer/renderer.h"
 #include "scene/scene.h"
+#include "network/network.h"
 
 // The SDK lives in <repo>/egn, the engine headers in <repo>/engine and the
 // compiled shared library in <repo>/bin.
@@ -35,6 +36,8 @@ pub mut:
 	window_height int
 	window_pos_x  int
 	window_pos_y  int
+	vsync         bool
+	target_fps    int
 }
 
 fn C.engine_create_instance(settings &C.EngineSettings, out_instance_ptr &voidptr) bool
@@ -45,6 +48,12 @@ fn C.engine_get_delta_time(instance_ptr voidptr) f64
 fn C.engine_get_elapsed_time(instance_ptr voidptr) f64
 fn C.engine_get_window_size(instance_ptr voidptr, out_width &int, out_height &int) bool
 fn C.engine_destroy_instance(instance_ptr voidptr)
+fn C.engine_set_vsync(instance_ptr voidptr, vsync bool)
+fn C.engine_get_vsync(instance_ptr voidptr) bool
+fn C.engine_set_target_fps(instance_ptr voidptr, target_fps i32)
+fn C.engine_get_target_fps(instance_ptr voidptr) i32
+fn C.engine_set_pointer_lock(instance_ptr voidptr, locked bool)
+fn C.engine_is_pointer_locked(instance_ptr voidptr) bool
 
 // ---------------------------------------------------------------------------
 // Logging
@@ -68,6 +77,7 @@ fn C.inputs_was_btn_up(button int) bool
 
 fn C.inputs_get_mouse_pos(out_x &int, out_y &int)
 fn C.inputs_get_prev_mouse_pos(out_x &int, out_y &int)
+fn C.inputs_get_mouse_delta(out_x &f32, out_y &f32)
 fn C.inputs_mouse_wheel() i16
 fn C.inputs_prev_mouse_wheel() i16
 
@@ -87,6 +97,11 @@ fn C.renderer_texture_load(path &char) u32
 fn C.renderer_texture_release(texture u32)
 fn C.renderer_mesh_cube() u32
 fn C.renderer_mesh_sphere() u32
+fn C.renderer_mesh_load_obj(path &char) u32
+fn C.renderer_mesh_load_glb(path &char) u32
+fn C.renderer_mesh_animation_count(mesh u32) u32
+fn C.renderer_mesh_animation_name(mesh u32, index u32) &char
+fn C.renderer_mesh_animation_duration(mesh u32, index u32) f32
 fn C.renderer_screenshot(path &char) bool
 
 // ---------------------------------------------------------------------------
@@ -131,8 +146,13 @@ fn C.egn_object_is_active_in_hierarchy(object voidptr) bool
 // ---------------------------------------------------------------------------
 
 fn C.egn_object_add_camera(object voidptr, projection i32, fov f32, ortho_size f32, near_clip f32, far_clip f32, viewport_x f32, viewport_y f32, viewport_width f32, viewport_height f32, layer_mask u32, clear_r f32, clear_g f32, clear_b f32, clear_a f32, clear_color bool, clear_depth bool, order i32, enabled bool) voidptr
-fn C.egn_object_add_model(object voidptr, mesh u32, texture u32, r f32, g f32, b f32, a f32, enabled bool) voidptr
+fn C.egn_object_add_model(object voidptr, mesh u32, texture u32, r f32, g f32, b f32, a f32, cast_shadows bool, enabled bool) voidptr
 fn C.egn_object_add_sprite(object voidptr, texture u32, width f32, height f32, pivot_x f32, pivot_y f32, r f32, g f32, b f32, a f32, enabled bool) voidptr
+fn C.egn_object_add_animation(object voidptr, clip i32, speed f32, loop bool, playing bool, enabled bool) voidptr
+fn C.egn_object_add_rigidbody(object voidptr, motion_type i32, is_2d bool, gravity_factor f32, friction f32, restitution f32, linear_damping f32, angular_damping f32, enabled bool) voidptr
+fn C.egn_object_add_collider(object voidptr, shape_type i32, size_x f32, size_y f32, size_z f32, radius f32, mesh u32, offset_x f32, offset_y f32, offset_z f32, enabled bool) voidptr
+fn C.egn_object_add_particles(object voidptr, max_particles u32, texture u32, spawn_rate f32, lifetime f32, speed f32, speed_variation f32, gravity f32, drag f32, spread f32, radius f32, dir_x f32, dir_y f32, dir_z f32, size_start f32, size_end f32, size_scale f32, fade_in f32, fade_out f32, r0 f32, g0 f32, b0 f32, a0 f32, r1 f32, g1 f32, b1 f32, a1 f32, enabled bool) voidptr
+fn C.egn_object_add_light(object voidptr, light_type i32, r f32, g f32, b f32, intensity f32, range f32, cast_shadows bool, enabled bool) voidptr
 
 fn C.egn_object_get_component(object voidptr, component_type i32) voidptr
 fn C.egn_object_get_component_at(object voidptr, component_type i32, index u32) voidptr
@@ -176,6 +196,8 @@ fn C.egn_model_get_texture(model voidptr) u32
 fn C.egn_model_set_texture(model voidptr, texture u32)
 fn C.egn_model_get_color(model voidptr, r &f32, g &f32, b &f32, a &f32)
 fn C.egn_model_set_color(model voidptr, r f32, g f32, b f32, a f32)
+fn C.egn_model_get_cast_shadows(model voidptr) bool
+fn C.egn_model_set_cast_shadows(model voidptr, cast_shadows bool)
 
 // Sprite component --------------------------------------------------------
 
@@ -187,3 +209,115 @@ fn C.egn_sprite_get_pivot(sprite voidptr, x &f32, y &f32)
 fn C.egn_sprite_set_pivot(sprite voidptr, x f32, y f32)
 fn C.egn_sprite_get_color(sprite voidptr, r &f32, g &f32, b &f32, a &f32)
 fn C.egn_sprite_set_color(sprite voidptr, r f32, g f32, b f32, a f32)
+
+// Animation component
+fn C.egn_animation_get_clip(animation voidptr) i32
+fn C.egn_animation_set_clip(animation voidptr, clip i32)
+fn C.egn_animation_get_time(animation voidptr) f32
+fn C.egn_animation_set_time(animation voidptr, time f32)
+fn C.egn_animation_get_speed(animation voidptr) f32
+fn C.egn_animation_set_speed(animation voidptr, speed f32)
+fn C.egn_animation_get_loop(animation voidptr) bool
+fn C.egn_animation_set_loop(animation voidptr, loop bool)
+fn C.egn_animation_get_playing(animation voidptr) bool
+fn C.egn_animation_set_playing(animation voidptr, playing bool)
+
+// Light component
+fn C.egn_light_get_type(light voidptr) i32
+fn C.egn_light_set_type(light voidptr, light_type i32)
+fn C.egn_light_get_color(light voidptr, r &f32, g &f32, b &f32)
+fn C.egn_light_set_color(light voidptr, r f32, g f32, b f32)
+fn C.egn_light_get_intensity(light voidptr) f32
+fn C.egn_light_set_intensity(light voidptr, intensity f32)
+fn C.egn_light_get_range(light voidptr) f32
+fn C.egn_light_set_range(light voidptr, range f32)
+fn C.egn_light_get_cast_shadows(light voidptr) bool
+fn C.egn_light_set_cast_shadows(light voidptr, cast_shadows bool)
+
+// Rigidbody component
+fn C.egn_rigidbody_get_motion_type(rigidbody voidptr) i32
+fn C.egn_rigidbody_set_motion_type(rigidbody voidptr, motion_type i32)
+fn C.egn_rigidbody_is_2d(rigidbody voidptr) bool
+fn C.egn_rigidbody_set_2d(rigidbody voidptr, is_2d bool)
+fn C.egn_rigidbody_get_gravity_factor(rigidbody voidptr) f32
+fn C.egn_rigidbody_set_gravity_factor(rigidbody voidptr, factor f32)
+fn C.egn_rigidbody_get_mass(rigidbody voidptr) f32
+fn C.egn_rigidbody_set_mass(rigidbody voidptr, mass f32)
+fn C.egn_rigidbody_get_friction(rigidbody voidptr) f32
+fn C.egn_rigidbody_set_friction(rigidbody voidptr, friction f32)
+fn C.egn_rigidbody_get_restitution(rigidbody voidptr) f32
+fn C.egn_rigidbody_set_restitution(rigidbody voidptr, restitution f32)
+fn C.egn_rigidbody_get_linear_damping(rigidbody voidptr) f32
+fn C.egn_rigidbody_set_linear_damping(rigidbody voidptr, damping f32)
+fn C.egn_rigidbody_get_angular_damping(rigidbody voidptr) f32
+fn C.egn_rigidbody_set_angular_damping(rigidbody voidptr, damping f32)
+fn C.egn_rigidbody_apply_impulse(rigidbody voidptr, x f32, y f32, z f32)
+fn C.egn_rigidbody_get_linear_velocity(rigidbody voidptr, x &f32, y &f32, z &f32)
+fn C.egn_rigidbody_set_linear_velocity(rigidbody voidptr, x f32, y f32, z f32)
+fn C.egn_rigidbody_get_angular_velocity(rigidbody voidptr, x &f32, y &f32, z &f32)
+fn C.egn_rigidbody_set_angular_velocity(rigidbody voidptr, x f32, y f32, z f32)
+
+// Collider component
+fn C.egn_collider_get_shape(collider voidptr) i32
+fn C.egn_collider_set_shape(collider voidptr, shape_type i32)
+fn C.egn_collider_get_size(collider voidptr, x &f32, y &f32, z &f32)
+fn C.egn_collider_set_size(collider voidptr, x f32, y f32, z f32)
+fn C.egn_collider_get_radius(collider voidptr) f32
+fn C.egn_collider_set_radius(collider voidptr, radius f32)
+fn C.egn_collider_get_mesh(collider voidptr) u32
+fn C.egn_collider_set_mesh(collider voidptr, mesh u32)
+fn C.egn_collider_get_offset(collider voidptr, x &f32, y &f32, z &f32)
+fn C.egn_collider_set_offset(collider voidptr, x f32, y f32, z f32)
+
+// Particles component
+fn C.egn_particles_get_max(particles voidptr) u32
+fn C.egn_particles_set_max(particles voidptr, max_particles u32)
+fn C.egn_particles_get_texture(particles voidptr) u32
+fn C.egn_particles_set_texture(particles voidptr, texture u32)
+fn C.egn_particles_get_spawn_rate(particles voidptr) f32
+fn C.egn_particles_set_spawn_rate(particles voidptr, spawn_rate f32)
+fn C.egn_particles_get_lifetime(particles voidptr) f32
+fn C.egn_particles_set_lifetime(particles voidptr, lifetime f32)
+fn C.egn_particles_get_speed(particles voidptr) f32
+fn C.egn_particles_set_speed(particles voidptr, speed f32)
+fn C.egn_particles_get_gravity(particles voidptr) f32
+fn C.egn_particles_set_gravity(particles voidptr, gravity f32)
+fn C.egn_particles_get_drag(particles voidptr) f32
+fn C.egn_particles_set_drag(particles voidptr, drag f32)
+fn C.egn_particles_get_spread(particles voidptr) f32
+fn C.egn_particles_set_spread(particles voidptr, spread f32)
+fn C.egn_particles_set_direction(particles voidptr, x f32, y f32, z f32)
+fn C.egn_particles_get_size(particles voidptr, start &f32, end &f32)
+fn C.egn_particles_set_size(particles voidptr, start f32, end f32)
+fn C.egn_particles_get_color_start(particles voidptr, r &f32, g &f32, b &f32, a &f32)
+fn C.egn_particles_set_color_start(particles voidptr, r f32, g f32, b f32, a f32)
+fn C.egn_particles_get_color_end(particles voidptr, r &f32, g &f32, b &f32, a &f32)
+fn C.egn_particles_set_color_end(particles voidptr, r f32, g f32, b f32, a f32)
+fn C.egn_particles_emit(particles voidptr, count u32)
+
+// Network bindings ---------------------------------------------------------
+
+fn C.egn_net_server_create(port u16, udp bool) voidptr
+fn C.egn_net_server_destroy(server voidptr)
+fn C.egn_net_server_poll(server voidptr)
+fn C.egn_net_server_broadcast(server voidptr, data voidptr, size u32) bool
+fn C.egn_net_server_send(server voidptr, client_id u32, data voidptr, size u32) bool
+fn C.egn_net_server_poll_event(server voidptr, event voidptr) bool
+fn C.egn_net_server_client_count(server voidptr) u32
+
+fn C.egn_net_client_create(host &char, port u16, udp bool) voidptr
+fn C.egn_net_client_destroy(client voidptr)
+fn C.egn_net_client_poll(client voidptr)
+fn C.egn_net_client_send(client voidptr, data voidptr, size u32) bool
+fn C.egn_net_client_poll_event(client voidptr, event voidptr) bool
+fn C.egn_net_client_is_connected(client voidptr) bool
+
+fn C.egn_net_host_create(port u16, udp bool) voidptr
+fn C.egn_net_host_destroy(host voidptr)
+fn C.egn_net_host_poll(host voidptr)
+fn C.egn_net_host_send(host voidptr, data voidptr, size u32) bool
+fn C.egn_net_host_broadcast(host voidptr, data voidptr, size u32) bool
+fn C.egn_net_host_poll_server_event(host voidptr, event voidptr) bool
+fn C.egn_net_host_poll_client_event(host voidptr, event voidptr) bool
+fn C.egn_net_host_client_count(host voidptr) u32
+fn C.egn_net_host_client_connected(host voidptr) bool

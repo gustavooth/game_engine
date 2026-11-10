@@ -18,3 +18,7 @@ b8 vkrenderer_texture_create_solid(VkContext *ctx, u8 r, u8 g, u8 b, u8 a,
                                    VkRendererTexture *out_texture);
 
 void vkrenderer_texture_destroy(VkContext *ctx, VkRendererTexture *texture);
+
+// Decodes an encoded image (PNG/JPEG/...) from memory and registers it in the
+// renderer texture table. Returns a 1-based texture handle, or 0.
+u32 vkrenderer_texture_register_from_memory(VkContext *ctx, const u8 *data, u64 size);

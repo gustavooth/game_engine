@@ -257,6 +257,27 @@ b8 egn_scene_initialize(void)
     return false;
   }
 
+  EgnObject *sun_object = egn_object_create(scene.root, "Sun");
+  if (!sun_object)
+  {
+    egn_scene_shutdown();
+    return false;
+  }
+
+  sun_object->position = vec3_create(0.0f, 10.0f, 0.0f);
+  sun_object->rotation = quat_from_euler_xyz(deg_to_rad(-50.0f), deg_to_rad(-30.0f), 0.0f);
+  egn_object_mark_world_dirty(sun_object);
+
+  EgnComponent *sun = egn_object_add_light(
+      sun_object, EGN_LIGHT_DIRECTIONAL,
+      1.0f, 0.95f, 0.85f, 1.0f, 0.0f, true, true);
+
+  if (!sun)
+  {
+    egn_scene_shutdown();
+    return false;
+  }
+
   scene_initialized = true;
   EGNINFO("Scene initialized (root object id 1)");
   return true;
@@ -612,4 +633,32 @@ b8 egn_object_is_active_in_hierarchy(void *handle)
   }
 
   return true;
+}
+
+static void scene_update_object(EgnObject *object, f64 delta_time)
+{
+  if (!object || !object->alive || !object->active)
+    return;
+
+  for (EgnComponent *component = object->first_component; component; component = component->next)
+  {
+    if (!component->alive || !component->enabled ||
+        component->type != EGN_COMPONENT_TYPE_ANIMATION)
+      continue;
+
+    EgnAnimationData *animation = &component->data.animation;
+    if (animation->playing && animation->speed != 0.0f)
+      animation->time += (f32)delta_time * animation->speed;
+  }
+
+  for (EgnObject *child = object->first_child; child; child = child->next_sibling)
+    scene_update_object(child, delta_time);
+}
+
+void egn_scene_update(f64 delta_time)
+{
+  if (!scene_initialized || !scene.root)
+    return;
+
+  scene_update_object(scene.root, delta_time);
 }

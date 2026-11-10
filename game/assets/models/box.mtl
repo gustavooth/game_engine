@@ -1,0 +1,7 @@
+# EGN test materials
+newmtl mat_checker
+Kd 1 1 1
+map_Kd ../textures/checker.png
+newmtl mat_stripes
+Kd 1 1 1
+map_Kd ../textures/stripes.png

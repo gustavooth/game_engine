@@ -255,6 +255,57 @@ void vkrenderer_texture_destroy(VkContext *ctx, VkRendererTexture *texture)
 
 // Public API ----------------------------------------------------------------
 
+static u32 texture_register_rgba(VkContext *ctx, const u8 *pixels, u32 width,
+                                 u32 height, const char *label)
+{
+  if (!ctx || !pixels || width == 0 || height == 0)
+    return 0;
+
+  u32 slot = VKRENDERER_MAX_TEXTURES;
+  for (u32 i = 0; i < VKRENDERER_MAX_TEXTURES; i++)
+  {
+    if (!ctx->textures[i].used)
+    {
+      slot = i;
+      break;
+    }
+  }
+
+  if (slot == VKRENDERER_MAX_TEXTURES)
+  {
+    EGNERROR("VKRENDERER texture table is full");
+    return 0;
+  }
+
+  if (!vkrenderer_texture_create(ctx, pixels, width, height, &ctx->textures[slot]))
+    return 0;
+
+  if (label)
+    EGNINFO("VKRENDERER loaded texture '%s' (%ux%u)", label, width, height);
+
+  return slot + 1;
+}
+
+u32 vkrenderer_texture_register_from_memory(VkContext *ctx, const u8 *data, u64 size)
+{
+  if (!ctx || !data || size == 0)
+    return 0;
+
+  int width = 0;
+  int height = 0;
+  int channels = 0;
+  stbi_uc *pixels = stbi_load_from_memory(data, (int)size, &width, &height, &channels, 4);
+  if (!pixels)
+  {
+    EGNERROR("VKRENDERER failed to decode embedded texture");
+    return 0;
+  }
+
+  u32 handle = texture_register_rgba(ctx, pixels, (u32)width, (u32)height, "<embedded>");
+  stbi_image_free(pixels);
+  return handle;
+}
+
 u32 renderer_texture_load(const char *path)
 {
   if (!path)
@@ -288,33 +339,9 @@ u32 renderer_texture_load(const char *path)
     return 0;
   }
 
-  u32 slot = 0;
-  for (u32 i = 0; i < VKRENDERER_MAX_TEXTURES; i++)
-  {
-    if (!ctx->textures[i].used)
-    {
-      slot = i;
-      break;
-    }
-  }
-
-  if (slot == 0 && ctx->textures[0].used)
-  {
-    EGNERROR("renderer_texture_load: texture table is full");
-    stbi_image_free(pixels);
-    return 0;
-  }
-
-  if (!vkrenderer_texture_create(ctx, pixels, (u32)width, (u32)height, &ctx->textures[slot]))
-  {
-    stbi_image_free(pixels);
-    return 0;
-  }
-
+  u32 handle = texture_register_rgba(ctx, pixels, (u32)width, (u32)height, path);
   stbi_image_free(pixels);
-
-  EGNINFO("VKRENDERER loaded texture '%s' (%ux%u)", path, (u32)width, (u32)height);
-  return slot + 1;
+  return handle;
 }
 
 void renderer_texture_release(u32 texture)

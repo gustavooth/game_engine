@@ -19,7 +19,7 @@
  * against the directory that contains the executable. This lets the game read
  * `assets/...` and `shaders/...` regardless of where it was launched from.
  */
-static b8 filemanager_resolve_read_path(const char *path, char *out_path, u64 out_size)
+b8 filemanager_resolve_path(const char *path, char *out_path, u64 out_size)
 {
   if (!path || !out_path || out_size == 0)
     return false;
@@ -156,7 +156,7 @@ b8 filemanager_read_all(const char *path, u8 **out_buffer_ptr, u64 *out_length)
     return false;
 
   char resolved_path[2048];
-  if (!filemanager_resolve_read_path(path, resolved_path, sizeof(resolved_path)))
+  if (!filemanager_resolve_path(path, resolved_path, sizeof(resolved_path)))
     return false;
 
   FILE *file = fopen(resolved_path, "rb");

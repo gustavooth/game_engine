@@ -7,6 +7,16 @@ static void vertex_set(MeshVertex *vertex, f32 x, f32 y, f32 z,
   vertex->position = vec3_create(x, y, z);
   vertex->normal = vec3_create(nx, ny, nz);
   vertex->uv = vec2_create(u, v);
+
+  // Non-skinned default: every vertex is fully weighted to the identity bone.
+  vertex->joints[0] = 0;
+  vertex->joints[1] = 0;
+  vertex->joints[2] = 0;
+  vertex->joints[3] = 0;
+  vertex->weights[0] = 1.0f;
+  vertex->weights[1] = 0.0f;
+  vertex->weights[2] = 0.0f;
+  vertex->weights[3] = 0.0f;
 }
 
 b8 shapes_build_cube(MeshVertex **out_vertices, u32 *out_vertex_count,

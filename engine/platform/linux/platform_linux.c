@@ -1,3 +1,4 @@
+#include "platform/platform.h"
 #include "defines.h"
 #include "core/logger.h"
 #include <stdlib.h>
@@ -5,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <time.h>
 
 #ifdef EGNPLATFORM_WAYLAND
 
@@ -93,3 +95,15 @@ f64 platform_get_absolute_time()
 }
 
 #endif
+void platform_sleep(u64 ms)
+{
+  platform_sleep_us(ms * 1000);
+}
+
+void platform_sleep_us(u64 us)
+{
+  struct timespec ts;
+  ts.tv_sec = (time_t)(us / 1000000);
+  ts.tv_nsec = (long)((us % 1000000) * 1000);
+  nanosleep(&ts, NULL);
+}

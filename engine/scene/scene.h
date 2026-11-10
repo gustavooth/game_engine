@@ -66,7 +66,12 @@ enum
 {
   EGN_COMPONENT_TYPE_CAMERA = 0,
   EGN_COMPONENT_TYPE_MODEL = 1,
-  EGN_COMPONENT_TYPE_SPRITE = 2
+  EGN_COMPONENT_TYPE_SPRITE = 2,
+  EGN_COMPONENT_TYPE_ANIMATION = 3,
+  EGN_COMPONENT_TYPE_LIGHT = 4,
+  EGN_COMPONENT_TYPE_RIGIDBODY = 5,
+  EGN_COMPONENT_TYPE_COLLIDER = 6,
+  EGN_COMPONENT_TYPE_PARTICLES = 7
 };
 
 // Projection values shared with the V SDK.
@@ -74,6 +79,28 @@ enum
 {
   EGN_PROJECTION_PERSPECTIVE = 0,
   EGN_PROJECTION_ORTHOGRAPHIC = 1
+};
+
+// Light values shared with the V SDK.
+enum
+{
+  EGN_LIGHT_DIRECTIONAL = 0,
+  EGN_LIGHT_POINT = 1
+};
+
+// Physics values shared with the V SDK.
+enum
+{
+  EGN_PHYSICS_MOTION_STATIC = 0,
+  EGN_PHYSICS_MOTION_KINEMATIC = 1,
+  EGN_PHYSICS_MOTION_DYNAMIC = 2
+};
+
+enum
+{
+  EGN_COLLIDER_BOX = 0,
+  EGN_COLLIDER_SPHERE = 1,
+  EGN_COLLIDER_MESH = 2
 };
 
 EGNAPI void *egn_object_add_camera(void *object, i32 projection,
@@ -87,12 +114,42 @@ EGNAPI void *egn_object_add_camera(void *object, i32 projection,
                                    i32 order, b8 enabled);
 
 EGNAPI void *egn_object_add_model(void *object, u32 mesh, u32 texture,
-                                  f32 r, f32 g, f32 b, f32 a, b8 enabled);
+                                  f32 r, f32 g, f32 b, f32 a,
+                                  b8 cast_shadows, b8 enabled);
 
 EGNAPI void *egn_object_add_sprite(void *object, u32 texture,
                                    f32 width, f32 height,
                                    f32 pivot_x, f32 pivot_y,
                                    f32 r, f32 g, f32 b, f32 a, b8 enabled);
+
+EGNAPI void *egn_object_add_animation(void *object, i32 clip, f32 speed,
+                                      b8 loop, b8 playing, b8 enabled);
+
+EGNAPI void *egn_object_add_light(void *object, i32 light_type,
+                                  f32 r, f32 g, f32 b, f32 intensity,
+                                  f32 range, b8 cast_shadows, b8 enabled);
+
+EGNAPI void *egn_object_add_rigidbody(void *object, i32 motion_type, b8 is_2d,
+                                      f32 gravity_factor, f32 friction,
+                                      f32 restitution, f32 linear_damping,
+                                      f32 angular_damping, b8 enabled);
+
+EGNAPI void *egn_object_add_collider(void *object, i32 shape_type,
+                                     f32 size_x, f32 size_y, f32 size_z,
+                                     f32 radius, u32 mesh,
+                                     f32 offset_x, f32 offset_y, f32 offset_z,
+                                     b8 enabled);
+
+EGNAPI void *egn_object_add_particles(void *object, u32 max_particles, u32 texture,
+                                      f32 spawn_rate, f32 lifetime, f32 speed,
+                                      f32 speed_variation, f32 gravity, f32 drag,
+                                      f32 spread, f32 radius,
+                                      f32 dir_x, f32 dir_y, f32 dir_z,
+                                      f32 size_start, f32 size_end, f32 size_scale,
+                                      f32 fade_in, f32 fade_out,
+                                      f32 r0, f32 g0, f32 b0, f32 a0,
+                                      f32 r1, f32 g1, f32 b1, f32 a1,
+                                      b8 enabled);
 
 EGNAPI void *egn_object_get_component(void *object, i32 type);
 EGNAPI void *egn_object_get_component_at(void *object, i32 type, u32 index);
@@ -136,6 +193,8 @@ EGNAPI u32 egn_model_get_texture(void *model);
 EGNAPI void egn_model_set_texture(void *model, u32 texture);
 EGNAPI void egn_model_get_color(void *model, f32 *r, f32 *g, f32 *b, f32 *a);
 EGNAPI void egn_model_set_color(void *model, f32 r, f32 g, f32 b, f32 a);
+EGNAPI b8 egn_model_get_cast_shadows(void *model);
+EGNAPI void egn_model_set_cast_shadows(void *model, b8 cast_shadows);
 
 // Sprite component ---------------------------------------------------------
 
@@ -147,3 +206,96 @@ EGNAPI void egn_sprite_get_pivot(void *sprite, f32 *x, f32 *y);
 EGNAPI void egn_sprite_set_pivot(void *sprite, f32 x, f32 y);
 EGNAPI void egn_sprite_get_color(void *sprite, f32 *r, f32 *g, f32 *b, f32 *a);
 EGNAPI void egn_sprite_set_color(void *sprite, f32 r, f32 g, f32 b, f32 a);
+
+// Animation component ------------------------------------------------------
+
+EGNAPI i32 egn_animation_get_clip(void *animation);
+EGNAPI void egn_animation_set_clip(void *animation, i32 clip);
+EGNAPI f32 egn_animation_get_time(void *animation);
+EGNAPI void egn_animation_set_time(void *animation, f32 time);
+EGNAPI f32 egn_animation_get_speed(void *animation);
+EGNAPI void egn_animation_set_speed(void *animation, f32 speed);
+EGNAPI b8 egn_animation_get_loop(void *animation);
+EGNAPI void egn_animation_set_loop(void *animation, b8 loop);
+EGNAPI b8 egn_animation_get_playing(void *animation);
+EGNAPI void egn_animation_set_playing(void *animation, b8 playing);
+
+// Light component ----------------------------------------------------------
+
+EGNAPI i32 egn_light_get_type(void *light);
+EGNAPI void egn_light_set_type(void *light, i32 light_type);
+EGNAPI void egn_light_get_color(void *light, f32 *r, f32 *g, f32 *b);
+EGNAPI void egn_light_set_color(void *light, f32 r, f32 g, f32 b);
+EGNAPI f32 egn_light_get_intensity(void *light);
+EGNAPI void egn_light_set_intensity(void *light, f32 intensity);
+EGNAPI f32 egn_light_get_range(void *light);
+EGNAPI void egn_light_set_range(void *light, f32 range);
+EGNAPI b8 egn_light_get_cast_shadows(void *light);
+EGNAPI void egn_light_set_cast_shadows(void *light, b8 cast_shadows);
+
+// Rigidbody component ------------------------------------------------------
+
+EGNAPI i32 egn_rigidbody_get_motion_type(void *rigidbody);
+EGNAPI void egn_rigidbody_set_motion_type(void *rigidbody, i32 motion_type);
+EGNAPI b8 egn_rigidbody_is_2d(void *rigidbody);
+EGNAPI void egn_rigidbody_set_2d(void *rigidbody, b8 is_2d);
+EGNAPI f32 egn_rigidbody_get_gravity_factor(void *rigidbody);
+EGNAPI void egn_rigidbody_set_gravity_factor(void *rigidbody, f32 factor);
+EGNAPI f32 egn_rigidbody_get_mass(void *rigidbody);
+EGNAPI void egn_rigidbody_set_mass(void *rigidbody, f32 mass);
+EGNAPI f32 egn_rigidbody_get_friction(void *rigidbody);
+EGNAPI void egn_rigidbody_set_friction(void *rigidbody, f32 friction);
+EGNAPI f32 egn_rigidbody_get_restitution(void *rigidbody);
+EGNAPI void egn_rigidbody_set_restitution(void *rigidbody, f32 restitution);
+EGNAPI f32 egn_rigidbody_get_linear_damping(void *rigidbody);
+EGNAPI void egn_rigidbody_set_linear_damping(void *rigidbody, f32 damping);
+EGNAPI f32 egn_rigidbody_get_angular_damping(void *rigidbody);
+EGNAPI void egn_rigidbody_set_angular_damping(void *rigidbody, f32 damping);
+EGNAPI void egn_rigidbody_apply_impulse(void *rigidbody, f32 x, f32 y, f32 z);
+EGNAPI void egn_rigidbody_get_linear_velocity(void *rigidbody, f32 *x, f32 *y, f32 *z);
+EGNAPI void egn_rigidbody_set_linear_velocity(void *rigidbody, f32 x, f32 y, f32 z);
+EGNAPI void egn_rigidbody_get_angular_velocity(void *rigidbody, f32 *x, f32 *y, f32 *z);
+EGNAPI void egn_rigidbody_set_angular_velocity(void *rigidbody, f32 x, f32 y, f32 z);
+
+// Collider component -------------------------------------------------------
+
+EGNAPI i32 egn_collider_get_shape(void *collider);
+EGNAPI void egn_collider_set_shape(void *collider, i32 shape_type);
+EGNAPI void egn_collider_get_size(void *collider, f32 *x, f32 *y, f32 *z);
+EGNAPI void egn_collider_set_size(void *collider, f32 x, f32 y, f32 z);
+EGNAPI f32 egn_collider_get_radius(void *collider);
+EGNAPI void egn_collider_set_radius(void *collider, f32 radius);
+EGNAPI u32 egn_collider_get_mesh(void *collider);
+EGNAPI void egn_collider_set_mesh(void *collider, u32 mesh);
+EGNAPI void egn_collider_get_offset(void *collider, f32 *x, f32 *y, f32 *z);
+EGNAPI void egn_collider_set_offset(void *collider, f32 x, f32 y, f32 z);
+
+// Particle emitter component ------------------------------------------------
+
+EGNAPI u32 egn_particles_get_max(void *particles);
+EGNAPI void egn_particles_set_max(void *particles, u32 max_particles);
+EGNAPI u32 egn_particles_get_texture(void *particles);
+EGNAPI void egn_particles_set_texture(void *particles, u32 texture);
+EGNAPI f32 egn_particles_get_spawn_rate(void *particles);
+EGNAPI void egn_particles_set_spawn_rate(void *particles, f32 spawn_rate);
+EGNAPI f32 egn_particles_get_lifetime(void *particles);
+EGNAPI void egn_particles_set_lifetime(void *particles, f32 lifetime);
+EGNAPI f32 egn_particles_get_speed(void *particles);
+EGNAPI void egn_particles_set_speed(void *particles, f32 speed);
+EGNAPI f32 egn_particles_get_gravity(void *particles);
+EGNAPI void egn_particles_set_gravity(void *particles, f32 gravity);
+EGNAPI f32 egn_particles_get_drag(void *particles);
+EGNAPI void egn_particles_set_drag(void *particles, f32 drag);
+EGNAPI f32 egn_particles_get_spread(void *particles);
+EGNAPI void egn_particles_set_spread(void *particles, f32 spread);
+EGNAPI void egn_particles_set_direction(void *particles, f32 x, f32 y, f32 z);
+EGNAPI void egn_particles_get_size(void *particles, f32 *start, f32 *end);
+EGNAPI void egn_particles_set_size(void *particles, f32 start, f32 end);
+EGNAPI void egn_particles_get_color_start(void *particles, f32 *r, f32 *g, f32 *b, f32 *a);
+EGNAPI void egn_particles_set_color_start(void *particles, f32 r, f32 g, f32 b, f32 a);
+EGNAPI void egn_particles_get_color_end(void *particles, f32 *r, f32 *g, f32 *b, f32 *a);
+EGNAPI void egn_particles_set_color_end(void *particles, f32 r, f32 g, f32 b, f32 a);
+EGNAPI void egn_particles_emit(void *particles, u32 count);
+
+// Advances animation playback. Called once per frame by the engine core.
+void egn_scene_update(f64 delta_time);

@@ -8,6 +8,7 @@
 #include "platform/window.h"
 #include "renderer/renderer.h"
 #include "scene/scene.h"
+#include "physics/physics.h"
 
 #include "core/egnstring.h"
 #include "memory/linear_allocator.h"
@@ -46,6 +47,10 @@ typedef struct EngineState
   b8 window_ready;
   b8 renderer_ready;
   b8 scene_ready;
+  b8 physics_ready;
+
+  b8 vsync;
+  i32 target_fps;
 } EngineState;
 
 static EngineState *engine_ptr;
@@ -59,6 +64,9 @@ static void engine_cleanup(EngineState *instance)
 {
   if (!instance)
     return;
+
+  if (instance->physics_ready)
+    egn_physics_shutdown();
 
   if (instance->scene_ready)
     egn_scene_shutdown();
@@ -189,7 +197,10 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
 
   window_show(&engine_ptr->window);
 
-  if (!renderer_initialize(&engine_ptr->window, settings->window_width, settings->window_height))
+  engine_ptr->vsync = settings->vsync;
+  engine_ptr->target_fps = settings->target_fps;
+
+  if (!renderer_initialize(&engine_ptr->window, settings->window_width, settings->window_height, settings->vsync))
   {
     EGNERROR("engine_create_instance: failed to initialize renderer state");
     engine_cleanup(instance);
@@ -204,6 +215,14 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
     return false;
   }
   instance->scene_ready = true;
+
+  if (!egn_physics_initialize())
+  {
+    EGNERROR("engine_create_instance: failed to initialize physics state");
+    engine_cleanup(instance);
+    return false;
+  }
+  instance->physics_ready = true;
 
   events_register(EVENT_CODE_APPLICATION_QUIT, 0, &engine_on_event);
   events_register(EVENT_CODE_KEY_PRESSED, 0, &engine_on_key);
@@ -234,6 +253,8 @@ EGNAPI b8 engine_frame(void *instance_ptr)
   if (!engine_ptr || instance_ptr != engine_ptr || !engine_ptr->running)
     return false;
 
+  f64 frame_start = platform_get_absolute_time();
+
   clock_update(&engine_ptr->clock);
 
   // Calculate delta time
@@ -252,12 +273,22 @@ EGNAPI b8 engine_frame(void *instance_ptr)
     engine_ptr->time_count -= 1.0;
   }
 
+  inputs_update(delta);
   window_process_messages(&engine_ptr->window);
 
-  inputs_update(delta);
+  egn_scene_update(delta);
+  egn_physics_update(delta);
 
   RenderPacket packet = {delta};
   renderer_draw_frame(packet);
+
+  if (engine_ptr->target_fps > 0)
+  {
+    f64 target = 1.0 / (f64)engine_ptr->target_fps;
+    f64 elapsed = platform_get_absolute_time() - frame_start;
+    if (elapsed < target)
+      platform_sleep_us((u64)((target - elapsed) * 1000000.0));
+  }
 
   return engine_ptr->running;
 }
@@ -346,16 +377,11 @@ b8 engine_on_event(u16 code, void *sender, EventContext data)
 
 b8 engine_on_key(u16 code, void *sender, EventContext data)
 {
-  u16 key = data.data.u16[0];
-  if (code == EVENT_CODE_KEY_PRESSED)
-  {
-    if (key == KEY_ESCAPE)
-    {
-      EventContext ctx = {0};
-      events_fire(EVENT_CODE_APPLICATION_QUIT, 0, ctx);
-    }
-  }
-
+  // The engine does not consume keys: games own the input policy. In
+  // particular Esc releases the pointer lock in the demo and Q quits.
+  (void)code;
+  (void)sender;
+  (void)data;
   return false;
 }
 
@@ -366,4 +392,48 @@ b8 engine_on_resize(u16 code, void *sender, EventContext data)
   renderer_resize((u32)data.data.u16[0], (u32)data.data.u16[1]);
 
   return false;
+}
+
+EGNAPI void engine_set_vsync(void *instance_ptr, b8 vsync)
+{
+  if (!engine_ptr || (instance_ptr && instance_ptr != engine_ptr))
+    return;
+
+  engine_ptr->vsync = vsync;
+  renderer_set_vsync(vsync);
+}
+
+EGNAPI b8 engine_get_vsync(void *instance_ptr)
+{
+  if (!engine_ptr || instance_ptr != engine_ptr)
+    return false;
+  return engine_ptr->vsync;
+}
+
+EGNAPI void engine_set_target_fps(void *instance_ptr, i32 target_fps)
+{
+  if (!engine_ptr || (instance_ptr && instance_ptr != engine_ptr))
+    return;
+  engine_ptr->target_fps = target_fps < 0 ? 0 : target_fps;
+}
+
+EGNAPI i32 engine_get_target_fps(void *instance_ptr)
+{
+  if (!engine_ptr || instance_ptr != engine_ptr)
+    return 0;
+  return engine_ptr->target_fps;
+}
+
+EGNAPI void engine_set_pointer_lock(void *instance_ptr, b8 locked)
+{
+  if (!engine_ptr || (instance_ptr && instance_ptr != engine_ptr))
+    return;
+  window_set_pointer_lock(&engine_ptr->window, locked);
+}
+
+EGNAPI b8 engine_is_pointer_locked(void *instance_ptr)
+{
+  if (!engine_ptr || instance_ptr != engine_ptr)
+    return false;
+  return window_is_pointer_locked(&engine_ptr->window);
 }

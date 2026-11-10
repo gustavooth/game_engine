@@ -11,6 +11,9 @@ typedef struct VkRendererShaderParams
   const VkVertexInputAttributeDescription *attributes;
   u32 attribute_count;
 
+  const VkDescriptorSetLayout *set_layouts;
+  u32 set_layout_count;
+
   u32 push_constant_size;
 
   b8 depth_test;
@@ -18,6 +21,9 @@ typedef struct VkRendererShaderParams
   b8 blending;
   VkCullModeFlags cull_mode;
   VkFrontFace front_face;
+
+  VkRenderPass render_pass;     // 0 = main render pass
+  u32 color_attachment_count;   // 0 for depth-only shadow pipelines
 } VkRendererShaderParams;
 
 /**

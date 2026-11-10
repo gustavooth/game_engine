@@ -4,6 +4,7 @@
 #include "defines.h"
 #include "math/math.h"
 #include "renderer/renderer_types.h"
+#include "renderer/vulkan/vkrenderer_asset_types.h"
 #include <vulkan/vulkan.h>
 
 #define VKCHECK(expr)                                                          \
@@ -13,6 +14,10 @@
 // 1-based indexes into these tables; 0 always means "invalid".
 #define VKRENDERER_MAX_TEXTURES 512
 #define VKRENDERER_MAX_MESHES 512
+#define VKRENDERER_MAX_BONES 8192
+#define VKRENDERER_BONE_FRAMES 8
+#define VKRENDERER_MAX_PARTICLE_SYSTEMS 32
+#define VKRENDERER_PARTICLE_WORKGROUP 64
 
 typedef struct VkRendererQueueIndexes {
   u32 graphics_family_index; // queue family index
@@ -150,15 +155,36 @@ typedef struct VkRendererTexture {
   b8 used;
 } VkRendererTexture;
 
-typedef struct VkRendererMesh {
+typedef struct VkRendererSubMesh
+{
   VkBuffer vertex_buffer;
   VkDeviceMemory vertex_memory;
   VkBuffer index_buffer;
   VkDeviceMemory index_memory;
-  u32 vertex_count;
   u32 index_count;
+  u32 texture;
+  vec4 base_color;
+} VkRendererSubMesh;
+
+typedef struct VkRendererMesh
+{
+  VkRendererSubMesh *submeshes;
+  u32 submesh_count;
+  EgnMeshAsset *asset;
   b8 used;
 } VkRendererMesh;
+
+typedef struct VkRendererParticleSystem
+{
+  VkBuffer particle_buffer;
+  VkDeviceMemory particle_memory;
+  VkBuffer state_buffer;
+  VkDeviceMemory state_memory;
+  VkDescriptorSet descriptor_set;
+  u32 max_particles;
+  u32 texture;
+  b8 used;
+} VkRendererParticleSystem;
 
 typedef struct VkContext {
   VkInstance instance;
@@ -178,6 +204,7 @@ typedef struct VkContext {
   u32 framebuffer_width;
   u32 framebuffer_height;
   u64 framebuffer_generation;
+  b8 vsync;
 
   // image count
   VkRendererCommandBuffer *graphics_command_buffers;
@@ -196,8 +223,39 @@ typedef struct VkContext {
   VkDescriptorSetLayout descriptor_set_layout;
   VkDescriptorPool descriptor_pool;
 
+  // Skinning: per-frame storage buffer with bone matrices.
+  VkDescriptorSetLayout bone_set_layout;
+  VkDescriptorPool bone_descriptor_pool;
+  VkBuffer bone_buffers[VKRENDERER_BONE_FRAMES];
+  VkDeviceMemory bone_memories[VKRENDERER_BONE_FRAMES];
+  void *bone_mapped[VKRENDERER_BONE_FRAMES];
+  VkDescriptorSet bone_sets[VKRENDERER_BONE_FRAMES];
+  u32 bone_cursor;
+
+  // Lighting and directional shadow map.
+  VkDescriptorSetLayout lighting_set_layout;
+  VkDescriptorPool lighting_descriptor_pool;
+  VkBuffer lighting_buffers[VKRENDERER_BONE_FRAMES];
+  VkDeviceMemory lighting_memories[VKRENDERER_BONE_FRAMES];
+  void *lighting_mapped[VKRENDERER_BONE_FRAMES];
+  VkDescriptorSet lighting_sets[VKRENDERER_BONE_FRAMES];
+
+  VkRendererImage shadow_image;
+  VkSampler shadow_sampler;
+  VkRenderPass shadow_renderpass;
+  VkFramebuffer shadow_framebuffer;
+
   VkRendererShader shader_3d;
   VkRendererShader shader_sprite;
+  VkRendererShader shadow_shader;
+
+  // GPU particles.
+  VkDescriptorSetLayout particle_set_layout;
+  VkDescriptorPool particle_descriptor_pool;
+  VkPipelineLayout particle_compute_layout;
+  VkPipeline particle_compute_pipeline;
+  VkRendererShader particle_shader;
+  VkRendererParticleSystem particle_systems[VKRENDERER_MAX_PARTICLE_SYSTEMS];
 
   VkRendererTexture white_texture;
   VkRendererTexture textures[VKRENDERER_MAX_TEXTURES];
@@ -207,6 +265,11 @@ typedef struct VkContext {
   u32 cube_mesh;
   u32 sphere_mesh;
   u32 sprite_mesh;
+
+  // Animation states allocated for skinned models (freed at renderer shutdown).
+  void **animation_states;
+  u32 animation_state_count;
+  u32 animation_state_capacity;
 
   b8 (*find_memory_index)(u32 type_filter, u32 property_flags, u32 *out_index);
 } VkContext;
