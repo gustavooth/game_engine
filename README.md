@@ -416,8 +416,8 @@ Consulte `game/assets/models/LICENSE_FOX.md`.
 O build web usa Emscripten e expõe o núcleo C (cena, componentes e Jolt) como
 WebAssembly. O renderer WebGPU fica em `engine/renderer/webgpu/` e o SDK em
 `web/sdk/` (JavaScript ESM puro, sem Node/npm). A matemática da engine fica em
-`engine/platform/math.h` com implementações `linux/math_linux.c` e
-`web/math_web.c`, selecionadas pela definição da plataforma.
+`engine/math/` e é compilada tanto para Linux quanto para WebAssembly; o
+renderer web importa essas operações do wasm através de `web_math.c`.
 
 Primeira vez:
 

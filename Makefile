@@ -164,16 +164,16 @@ GAME_ASSETS := $(patsubst $(GAME_DIR)/assets/%,$(BIN_DIR)/assets/%,$(GAME_ASSETS
 # Web build: the C core (scene, components, physics and math) is compiled to
 # wasm. The browser-native JS SDK/WebGPU renderer is copied next to it; no
 # Node/npm/bundler is required. Physics uses the same Jolt sources rebuilt for
-# wasm and math_web.c is the platform math backend.
+# wasm; math is the same single implementation used natively.
 WEB_C_SRC := \
 	$(ENGINE_DIR)/platform/web/platform_web.c \
 	$(ENGINE_DIR)/platform/web/web_bridge.c \
 	$(ENGINE_DIR)/platform/web/web_math.c \
-	$(ENGINE_DIR)/platform/web/math_web.c \
 	$(ENGINE_DIR)/core/memo.c \
 	$(ENGINE_DIR)/core/logger.c \
 	$(ENGINE_DIR)/core/egnstring.c \
 	$(ENGINE_DIR)/containers/egnarray.c \
+	$(ENGINE_DIR)/math/math.c \
 	$(ENGINE_DIR)/scene/scene.c \
 	$(ENGINE_DIR)/scene/component.c \
 	$(ENGINE_DIR)/physics/physics.c

@@ -69,8 +69,7 @@ The web renderer implements forward rendering with:
 - multiple cameras with viewport/layer masks;
 - WASM-driven Jolt physics (box, sphere and mesh colliders);
 - a JavaScript SDK and an FPS-style input controller.
-- math operations imported from the wasm core (`engine/platform/math.h`,
-  `web/math_web.c`, `linux/math_linux.c`).
+- math operations imported from the wasm core (`engine/math/math.c`).
 
 Skeletal animation is currently evaluated by the native Vulkan renderer. The
 web renderer loads the GLB bind pose; a GPU skinning backend can share the

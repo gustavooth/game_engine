@@ -3,34 +3,6 @@
 #include "defines.h"
 #include "core/memo.h"
 
-// Platform math interface. The implementation is selected at compile time by
-// the platform definition (EGNPLATFORM_WEB / EGNPLATFORM_LINUX) and linked
-// from engine/platform/<platform>/math_<platform>.c.
-typedef struct EgnMathInterface
-{
-  const char *name;
-  f32 (*sin)(f32 x);
-  f32 (*cos)(f32 x);
-  f32 (*tan)(f32 x);
-  f32 (*acos)(f32 x);
-  f32 (*sqrt)(f32 x);
-  f32 (*abs)(f32 x);
-  i32 (*random)(void);
-  i32 (*random_range)(i32 min, i32 max);
-  f32 (*frandom)(void);
-  f32 (*frandom_range)(f32 min, f32 max);
-} EgnMathInterface;
-
-#if defined(EGNPLATFORM_WEB)
-#define EGN_MATH_PLATFORM_NAME "web"
-#elif defined(EGNPLATFORM_LINUX)
-#define EGN_MATH_PLATFORM_NAME "linux"
-#else
-#error "No math platform backend selected"
-#endif
-
-const EgnMathInterface *egn_math_interface(void);
-
 typedef union vec2_u
 {
     // An array of x, y

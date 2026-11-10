@@ -1,7 +1,7 @@
 #pragma once
 
 #include "defines.h"
-#include "platform/math.h"
+#include "math/math.h"
 #include "scene/scene.h"
 
 #define EGN_SCENE_NAME_MAX 64

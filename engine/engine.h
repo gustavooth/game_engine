@@ -8,7 +8,7 @@
 #include "core/events.h"
 #include "core/inputs.h"
 
-#include "platform/math.h"
+#include "math/math.h"
 
 #include "renderer/renderer.h"
 #include "scene/scene.h"

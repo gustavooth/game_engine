@@ -1,7 +1,7 @@
 #include "defines.h"
 
 #ifdef EGNPLATFORM_WEB
-#include "platform/math.h"
+#include "math/math.h"
 
 #include <emscripten/emscripten.h>
 #include <string.h>

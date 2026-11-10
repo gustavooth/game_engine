@@ -1,7 +1,7 @@
 #include "physics.h"
 #include "core/logger.h"
 #include "core/memo.h"
-#include "platform/math.h"
+#include "math/math.h"
 #include "renderer/renderer.h"
 #include "scene/scene_internal.h"
 
