@@ -8,6 +8,8 @@
 #include "joltc.h"
 
 #include <stddef.h>
+#include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #define EGN_PHYSICS_OBJECT_LAYER_NON_MOVING 0
@@ -107,6 +109,16 @@ static JPH_Shape *create_collider_shape(EgnObject *object, EgnColliderData *coll
     if (radius < 0.01f)
       radius = 0.01f;
     shape = (JPH_Shape *)JPH_SphereShape_Create(radius);
+  }
+  else if (collider->shape_type == EGN_COLLIDER_CAPSULE)
+  {
+    // size_y is the total height, including both hemispheres.
+    f32 radial_scale = scale.x > scale.z ? scale.x : scale.z;
+    f32 radius = collider->radius * radial_scale;
+    if (radius < 0.01f) radius = 0.01f;
+    f32 half_cylinder = collider->size_y * scale.y * 0.5f - radius;
+    if (half_cylinder < 0.001f) half_cylinder = 0.001f;
+    shape = (JPH_Shape *)JPH_CapsuleShape_Create(half_cylinder, radius);
   }
   else if (collider->shape_type == EGN_COLLIDER_MESH)
   {
@@ -315,6 +327,9 @@ b8 egn_physics_initialize(void)
   JPH_ObjectLayerPairFilterTable_EnableCollision(physics.object_layer_pair_filter,
                                                  EGN_PHYSICS_OBJECT_LAYER_MOVING,
                                                  EGN_PHYSICS_OBJECT_LAYER_NON_MOVING);
+  JPH_ObjectLayerPairFilterTable_EnableCollision(physics.object_layer_pair_filter,
+                                                 EGN_PHYSICS_OBJECT_LAYER_MOVING,
+                                                 EGN_PHYSICS_OBJECT_LAYER_MOVING);
 
   physics.broad_phase_layer_interface = JPH_BroadPhaseLayerInterfaceTable_Create(2, 2);
   JPH_BroadPhaseLayerInterfaceTable_MapObjectToBroadPhaseLayer(
@@ -354,6 +369,65 @@ b8 egn_physics_initialize(void)
   return true;
 }
 
+static void destroy_character(EgnCharacterData *data)
+{
+  if (data->character) JPH_CharacterBase_Destroy((JPH_CharacterBase *)data->character);
+  data->character = 0;
+  data->grounded = false;
+  data->velocity_y = 0;
+}
+
+static b8 create_character(EgnComponent *component)
+{
+  EgnCharacterData *data = &component->data.character;
+  JPH_Shape *shape = (JPH_Shape *)JPH_CapsuleShape_Create(data->height * 0.5f - data->radius, data->radius);
+  if (!shape) return false;
+  JPH_CharacterVirtualSettings settings = {0};
+  JPH_CharacterVirtualSettings_Init(&settings);
+  settings.base.shape = shape;
+  settings.base.supportingVolume.normal = (JPH_Vec3){0, 1, 0};
+  settings.base.supportingVolume.distance = -data->height * 0.5f + data->radius;
+  vec3 position = egn_object_get_world_position(component->owner);
+  data->plane_z = position.z;
+  JPH_RVec3 p = {position.x, position.y, position.z};
+  JPH_Quat rotation = {0, 0, 0, 1};
+  data->character = JPH_CharacterVirtual_Create(&settings, &p, &rotation, component->owner->id, physics.system);
+  JPH_Shape_Destroy(shape);
+  return data->character != 0;
+}
+
+static void update_character(EgnComponent *component, f32 delta)
+{
+  EgnCharacterData *data = &component->data.character;
+  JPH_CharacterVirtual *character = data->character;
+  if (!character) return;
+  if (data->jump_speed > 0 && data->grounded) {
+    data->velocity_y = data->jump_speed;
+    data->grounded = false;
+  } else if (data->grounded && data->velocity_y < 0) {
+    data->velocity_y = 0;
+  }
+  data->jump_speed = 0;
+  data->velocity_y -= data->gravity * delta;
+  JPH_Vec3 velocity = {data->velocity_x, data->velocity_y,
+                       component->type == EGN_COMPONENT_TYPE_CHARACTER_2D ? 0 : data->velocity_z};
+  JPH_CharacterVirtual_SetLinearVelocity(character, &velocity);
+  JPH_CharacterVirtual_Update(character, delta, EGN_PHYSICS_OBJECT_LAYER_MOVING, physics.system, 0, 0);
+  data->grounded = JPH_CharacterBase_IsSupported((JPH_CharacterBase *)character);
+  if (data->grounded && data->velocity_y < 0) data->velocity_y = 0;
+  JPH_RVec3 position;
+  JPH_CharacterVirtual_GetPosition(character, &position);
+  if (component->type == EGN_COMPONENT_TYPE_CHARACTER_2D) {
+    position.z = data->plane_z;
+    JPH_CharacterVirtual_SetPosition(character, &position);
+  }
+  vec3 local_position; quat local_rotation;
+  world_to_local(component->owner, vec3_create(position.x, position.y, position.z),
+                 egn_object_get_world_rotation(component->owner), &local_position, &local_rotation);
+  component->owner->position = local_position;
+  egn_object_mark_world_dirty(component->owner);
+}
+
 void egn_physics_shutdown(void)
 {
   if (!physics.initialized)
@@ -367,6 +441,8 @@ void egn_physics_shutdown(void)
       EgnComponent *component = scene->components[i];
       if (component && component->type == EGN_COMPONENT_TYPE_COLLIDER)
         destroy_collider_body(&component->data.collider);
+      else if (component && (component->type == EGN_COMPONENT_TYPE_CHARACTER_2D || component->type == EGN_COMPONENT_TYPE_CHARACTER_3D))
+        destroy_character(&component->data.character);
     }
   }
 
@@ -445,6 +521,16 @@ void egn_physics_update(f64 delta_time)
       create_body_for_collider(object, collider);
   }
 
+  for (u32 i = 0; i < scene->component_count; ++i)
+  {
+    EgnComponent *component = scene->components[i];
+    if (!component || (component->type != EGN_COMPONENT_TYPE_CHARACTER_2D && component->type != EGN_COMPONENT_TYPE_CHARACTER_3D)) continue;
+    if (!component->alive || !component->enabled || !component->owner || !egn_object_is_active_in_hierarchy(component->owner))
+      destroy_character(&component->data.character);
+    else if (!component->data.character.character)
+      create_character(component);
+  }
+
   if (delta_time > 0.25)
     delta_time = 0.25;
   physics.accumulator += delta_time;
@@ -469,6 +555,14 @@ void egn_physics_update(f64 delta_time)
     }
 
     JPH_PhysicsSystem_Update(physics.system, (float)EGN_PHYSICS_FIXED_STEP, 1, physics.job_system);
+    for (u32 i = 0; i < scene->component_count; ++i)
+    {
+      EgnComponent *component = scene->components[i];
+      if (component && component->alive && component->enabled && component->owner &&
+          egn_object_is_active_in_hierarchy(component->owner) &&
+          (component->type == EGN_COMPONENT_TYPE_CHARACTER_2D || component->type == EGN_COMPONENT_TYPE_CHARACTER_3D))
+        update_character(component, (f32)EGN_PHYSICS_FIXED_STEP);
+    }
     physics.accumulator -= EGN_PHYSICS_FIXED_STEP;
     steps++;
   }
@@ -569,4 +663,131 @@ void egn_physics_set_angular_velocity(void *rigidbody, f32 x, f32 y, f32 z)
   JPH_Vec3 velocity = {x, y, z};
   JPH_BodyInterface_SetAngularVelocity(physics.body_interface, (JPH_BodyID)collider->body_id, &velocity);
   JPH_BodyInterface_ActivateBody(physics.body_interface, (JPH_BodyID)collider->body_id);
+}
+
+// Query results use stable scene IDs rather than pointers. Jolt can report
+// multiple sub-shapes for one body; retain the closest result per object.
+typedef struct EgnQueryCollector {
+  EgnPhysicsHit *hits;
+  u32 count;
+  f32 distance;
+} EgnQueryCollector;
+
+static void query_add(EgnQueryCollector *query, JPH_BodyID body, f32 fraction)
+{
+  EgnScene *scene = egn_scene_get();
+  for (u32 i = 0; i < scene->component_count; ++i)
+  {
+    EgnComponent *c = scene->components[i];
+    if (!c || !c->alive || !c->enabled || c->type != EGN_COMPONENT_TYPE_COLLIDER ||
+        !c->owner || !c->owner->alive || !egn_object_is_active_in_hierarchy(c->owner) ||
+        !c->data.collider.body_created || c->data.collider.body_id != body)
+      continue;
+    u32 id = c->owner->id;
+    f32 distance = fraction * query->distance;
+    for (u32 j = 0; j < query->count; ++j)
+      if (query->hits[j].object_id == id)
+      {
+        if (distance < query->hits[j].distance) query->hits[j].distance = distance;
+        return;
+      }
+    query->hits[query->count++] = (EgnPhysicsHit){id, distance};
+    return;
+  }
+}
+static void ray_result(void *context, const JPH_RayCastResult *hit)
+{
+  query_add((EgnQueryCollector *)context, hit->bodyID, hit->fraction);
+}
+static void overlap_result(void *context, const JPH_CollideShapeResult *hit)
+{
+  query_add((EgnQueryCollector *)context, hit->bodyID2, 0);
+}
+static int hit_compare(const void *a, const void *b)
+{
+  f32 x = ((const EgnPhysicsHit *)a)->distance, y = ((const EgnPhysicsHit *)b)->distance;
+  return (x > y) - (x < y);
+}
+static u32 query_finish(EgnQueryCollector *query, EgnPhysicsHit *out, u32 capacity)
+{
+  qsort(query->hits, query->count, sizeof(*query->hits), hit_compare);
+  u32 copied = query->count < capacity ? query->count : capacity;
+  if (out && copied) memcpy(out, query->hits, copied * sizeof(*out));
+  u32 count = query->count;
+  MEMOFREE(query->hits);
+  return count;
+}
+static b8 query_begin(EgnQueryCollector *query)
+{
+  if (!physics.initialized || !egn_scene_get()->object_count) return false;
+  query->hits = MEMOALLOC((u64)egn_scene_get()->object_count * sizeof(*query->hits), MEMO_SCENE);
+  query->count = 0;
+  return query->hits != 0;
+}
+
+u32 egn_physics_ray_cast(f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz,
+                         f32 distance, EgnPhysicsHit *out, u32 capacity)
+{
+  vec3 direction = vec3_create(dx, dy, dz);
+  f32 length = vec3_length(direction);
+  if (!isfinite(x) || !isfinite(y) || !isfinite(z) || !isfinite(length) || !isfinite(distance) || length <= 0 || distance <= 0 || (capacity && !out)) return 0;
+  EgnQueryCollector collector = {0};
+  if (!query_begin(&collector)) return 0;
+  collector.distance = distance;
+  JPH_RVec3 origin = {x, y, z};
+  JPH_Vec3 delta = {dx / length * distance, dy / length * distance, dz / length * distance};
+  JPH_RayCastSettings settings = {0};
+  settings.treatConvexAsSolid = true;
+  JPH_NarrowPhaseQuery_CastRay3(JPH_PhysicsSystem_GetNarrowPhaseQuery(physics.system),
+                               &origin, &delta, &settings, JPH_CollisionCollectorType_AllHitSorted,
+                               ray_result, &collector, 0, 0, 0, 0);
+  return query_finish(&collector, out, capacity);
+}
+
+static u32 overlap_shape(JPH_Shape *shape, f32 x, f32 y, f32 z, b8 rotate_to_xy,
+                         EgnPhysicsHit *out, u32 capacity)
+{
+  if (!shape) return 0;
+  EgnQueryCollector collector = {0};
+  if (!query_begin(&collector)) { JPH_Shape_Destroy(shape); return 0; }
+  JPH_RVec3 origin = {x, y, z}, base = {0, 0, 0};
+  JPH_RMatrix4x4 transform;
+  if (rotate_to_xy) {
+    JPH_Quat rotation = {0.70710678f, 0, 0, 0.70710678f};
+    JPH_RMatrix4x4_RotationTranslation(&transform, &rotation, &origin);
+  } else JPH_RMatrix4x4_Translation(&transform, &origin);
+  JPH_Vec3 scale = {1, 1, 1};
+  JPH_CollideShapeSettings settings;
+  JPH_CollideShapeSettings_Init(&settings);
+  JPH_NarrowPhaseQuery_CollideShape2(JPH_PhysicsSystem_GetNarrowPhaseQuery(physics.system),
+                                    shape, &scale, &transform, &settings, &base,
+                                    JPH_CollisionCollectorType_AllHit, overlap_result,
+                                    &collector, 0, 0, 0, 0);
+  JPH_Shape_Destroy(shape);
+  return query_finish(&collector, out, capacity);
+}
+
+u32 egn_physics_overlap_sphere(f32 x, f32 y, f32 z, f32 radius,
+                               EgnPhysicsHit *out, u32 capacity)
+{
+  if (!isfinite(x) || !isfinite(y) || !isfinite(z) || !isfinite(radius) || radius <= 0 || (capacity && !out)) return 0;
+  return overlap_shape((JPH_Shape *)JPH_SphereShape_Create(radius), x, y, z, false, out, capacity);
+}
+
+u32 egn_physics_overlap_box(f32 x, f32 y, f32 z, f32 sx, f32 sy, f32 sz,
+                            EgnPhysicsHit *out, u32 capacity)
+{
+  if (!isfinite(x) || !isfinite(y) || !isfinite(z) || !isfinite(sx) || !isfinite(sy) || !isfinite(sz) || sx <= 0 || sy <= 0 || sz <= 0 || (capacity && !out)) return 0;
+  JPH_Vec3 half = {sx * 0.5f, sy * 0.5f, sz * 0.5f};
+  return overlap_shape((JPH_Shape *)JPH_BoxShape_Create(&half, 0), x, y, z, false, out, capacity);
+}
+
+u32 egn_physics_overlap_circle_2d(f32 x, f32 y, f32 z, f32 radius, EgnPhysicsHit *out, u32 capacity)
+{
+  if (!isfinite(x) || !isfinite(y) || !isfinite(z) || !isfinite(radius) || radius <= 0 || (capacity && !out)) return 0;
+  return overlap_shape((JPH_Shape *)JPH_CylinderShape_Create(0.001f, radius), x, y, z, true, out, capacity);
+}
+u32 egn_physics_overlap_box_2d(f32 x, f32 y, f32 z, f32 width, f32 height, EgnPhysicsHit *out, u32 capacity)
+{
+  return egn_physics_overlap_box(x, y, z, width, height, 0.002f, out, capacity);
 }

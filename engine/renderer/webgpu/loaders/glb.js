@@ -102,11 +102,11 @@ function readAnimations(json, bin) {
     const channels = [];
     let duration = 0;
     for (const channel of animation.channels ?? []) {
-      if (channel.target?.node === undefined || !channel.sampler) continue;
+      if (channel.target?.node === undefined || channel.sampler === undefined) continue;
       const path = channel.target.path;
       if (path !== "translation" && path !== "rotation" && path !== "scale") continue;
       const sampler = animation.samplers?.[channel.sampler];
-      if (!sampler?.input || !sampler.output) continue;
+      if (!sampler || sampler.input === undefined || sampler.output === undefined) continue;
       const times = accessorData(json, bin, sampler.input);
       const values = accessorData(json, bin, sampler.output);
       const components = path === "rotation" ? 4 : 3;
@@ -121,9 +121,7 @@ function readAnimations(json, bin) {
       const last = times[times.length - 1] ?? 0;
       if (last > duration) duration = last;
     }
-    if (channels.length > 0) {
-      animations.push({ name: animation.name ?? `Animation ${animations.length}`, duration, channels });
-    }
+    animations.push({ name: animation.name ?? `Animation ${animations.length}`, duration, channels });
   }
   return animations;
 }

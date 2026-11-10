@@ -23,7 +23,7 @@ do módulo **EGN** (`egn/`).
   com fila de eventos e mensagens com tamanho prefixado no TCP.
 - **Demo:** personagem Fox animado, chão, física, partículas, luzes, câmera FPS
   com pointer lock real no Wayland e captura de tela.
-- **Web:** build WASM + WebGPU para canvas, renderer WebGPU, SDK JS e demo
+- **Web:** o mesmo jogo V compilado para WASM, com renderizador WebGPU
   web com física, OBJ/GLB, luzes, sombras e câmera FPS.
 
 ## Arquitetura
@@ -381,18 +381,22 @@ O jogo em `game/main.v` demonstra a engine completa:
 
 - chão texturizado com colisão estática;
 - Fox do Khronos com skeleton e animação `Walk`;
+- humanoide de Quaternius com animação esquelética `Idle` em loop;
 - caixas, esfera, corpo 2D e um OBJ com colisor de malha dinâmico;
 - sol com sombras, luzes pontuais, fogo e cristal com partículas na GPU;
-- câmera FPS com mouse travado de verdade no Wayland.
+- câmera FPS com mouse travado de verdade no Wayland;
+- contador de FPS renderizado pela engine no canto superior esquerdo, com VSync desativado por padrão.
 
 Controles:
 
 | Tecla | Ação |
 | --- | --- |
 | `WASD` | W/S na direção da câmera, A/D strafe |
-| `Space` / `Ctrl` | subir / descer |
+| `Space` | pular |
 | `Shift` | correr |
 | mouse | olhar (clique captura o ponteiro) |
+| botão esquerdo | pegar / soltar corpo dinâmico |
+| botão direito | arremessar corpo segurado |
 | `Esc` | encerra o jogo |
 | `F1` | alterna vsync |
 | `F2` | alterna limite de FPS (off/60/120/144) |
@@ -407,46 +411,75 @@ principal não abre sockets.
 - low poly fox por PixelMannen (CC0);
 - rigging/animação por @tomkranis (CC BY 4.0).
 
-Consulte `game/assets/models/LICENSE_FOX.md`.
+Consulte `game/assets/models/LICENSE_FOX.md` e `game/assets/models/LICENSE_HUMANOID.md`.
 
 
 ## Build web (WASM + WebGPU)
 
-O build web usa Emscripten e expõe o núcleo C (cena, componentes e Jolt) como
-WebAssembly. O renderer WebGPU fica em `engine/renderer/webgpu/` e o SDK em
-`web/sdk/` (JavaScript ESM puro, sem Node/npm). A matemática da engine fica em
-`engine/math/` e é compilada tanto para Linux quanto para WebAssembly; o
-renderer web importa essas operações do wasm através de `web_math.c`.
-
-Primeira vez:
+O build Web compila o mesmo `game/main.v` usado no Linux para WebAssembly,
+junto ao núcleo C e à física Jolt. O JavaScript em `engine/platform/web/` e
+`engine/renderer/webgpu/` é parte interna do backend gráfico e da integração
+com o navegador; a página apenas cria o canvas e inicia a engine.
 
 ```sh
 make emsdk    # instala o Emscripten SDK em third_part/
-make naga     # instala o naga (wgpu) para validar/canonicalizar WGSL
-make web      # gera wasm, SDK JS e demo em output/web/
-make run-web  # abre output/web/index.html no Chromium com WebGPU
+make naga     # instala o validador WGSL
+make web      # compila o jogo V e a engine para output/web/
+make run-web  # abre a demo no Chromium com WebGPU
 ```
 
-O WebGPU exige um contexto seguro (localhost/HTTPS) e um navegador com suporte
-a WebGPU. Em Linux, dependendo da GPU/driver, pode ser necessário habilitar
-`chrome://flags/#enable-unsafe-webgpu` e `chrome://flags/#enable-vulkan`.
-Os shaders web são WGSL. O `make web` usa o **naga** (o compilador de shaders
-do projeto wgpu) para validar e canonicalizar cada `.wgsl` antes de copiá-lo
-para `output/web`; WebGPU não executa GLSL/SPIR-V diretamente. Os shaders
-nativos continuam sendo GLSL compilado para SPIR-V pelo Vulkan.
+WebGPU requer um navegador compatível e um contexto seguro (localhost/HTTPS).
+O VSync e a apresentação no navegador são controlados pelo próprio navegador.
+Consulte `web/README.md` para detalhes da arquitetura e das limitações.
 
-`make run-web` já abre o Chromium com os flags necessários e com acesso a
-arquivos locais; use `WEB_BROWSER=/caminho/para/chrome` para sobrescrever.
+### Configuração gráfica (primeira etapa)
 
-A API JavaScript é carregada assim:
+A API C permite configurar as sombras antes de `engine_create_instance` e
+alterá-las entre quadros. A estrutura completa é validada e aplicada de uma vez;
+valores inválidos são rejeitados sem alterar a configuração anterior.
 
-```html
-<script type="module">
-  import createEgnModule from './engine.js';
-  import * as EGN from './egn.js';
-  import { startDemo } from './demo.js';
-  startDemo(EGN, createEgnModule);
-</script>
+```c
+#include "renderer/renderer.h"
+
+RendererGraphicsSettings graphics = renderer_graphics_settings_default();
+graphics.shadows_enabled = true;
+graphics.shadow_quality = RENDERER_QUALITY_HIGH;
+renderer_set_graphics_settings(&graphics);
 ```
 
-Consulte `web/README.md` para a API, limitações e arquitetura.
+Os níveis low, medium e high usam respectivamente 1, 9 e 25 amostras de
+filtragem; o mapa continua com resolução fixa de 2048 pixels. Desativar sombras
+elimina o passe de sombras. A configuração padrão mantém o comportamento anterior
+(ativo, medium). A API também está disponível no WebGPU e no SDK V. Iluminação global, HDR, tone mapping,
+color grading, dispersão atmosférica, oclusão de ambiente, bloom e exposição
+automática ainda não foram implementados por esta etapa.
+
+No SDK V, `Settings.graphics` configura a criação e `egn.set_graphics_settings`
+aplica uma estrutura completa durante a execução. `egn.graphics_settings()`
+retorna os valores atuais. Ambas as chamadas afetam o renderizador global.
+
+```v
+mut graphics := egn.GraphicsSettings{ shadow_quality: .high }
+mut app := egn.create(egn.Settings{ graphics: graphics })!
+graphics.shadows_enabled = false
+egn.set_graphics_settings(graphics)
+```
+
+### Etapas da atualização gráfica
+
+1. **Configuração em lote e sombras:** concluída para Vulkan e WebGPU; a
+   qualidade controla a filtragem, não a resolução do mapa.
+2. **Materiais e iluminação PBR:** em andamento. O WebGPU usa metallic e
+   roughness na iluminação direta; falta o suporte Vulkan e validação visual.
+3. **HDR e pós-processamento:** buffers HDR, tone mapping, color grading e
+   exposição automática.
+4. **Efeitos de espaço de tela:** ambient occlusion e bloom, com controles de
+   qualidade e recursos dimensionados por preset.
+5. **Ambiente e iluminação indireta:** atmospheric scattering e melhoria da
+   iluminação global; a técnica dependerá das capacidades dos backends.
+6. **Integração e validação:** demonstrar presets, trocas em runtime e custos
+   de desempenho; verificar o comportamento visual nos dois backends.
+
+As etapas futuras ainda não estão implementadas. Ao adicionar opções que
+exijam novos recursos GPU, a configuração será aplicada em lote em um limite
+seguro entre quadros.

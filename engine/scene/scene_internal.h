@@ -44,6 +44,8 @@ typedef struct EgnModelData
   f32 g;
   f32 b;
   f32 a;
+  f32 metallic;
+  f32 roughness;
   b8 cast_shadows;
 
   // Renderer-owned per-instance animation state and current bone slot.
@@ -95,6 +97,14 @@ typedef struct EgnRigidbodyData
   f32 linear_damping;
   f32 angular_damping;
 } EgnRigidbodyData;
+
+typedef struct EgnCharacterData
+{
+  f32 radius, height, gravity;
+  f32 velocity_x, velocity_z, velocity_y, jump_speed, plane_z;
+  b8 grounded;
+  void *character;
+} EgnCharacterData;
 
 typedef struct EgnParticleData
 {
@@ -155,6 +165,7 @@ typedef struct EgnComponent
     EgnRigidbodyData rigidbody;
     EgnColliderData collider;
     EgnParticleData particles;
+    EgnCharacterData character;
   } data;
   struct EgnComponent *next;
 } EgnComponent;
@@ -175,6 +186,8 @@ typedef struct EgnObject
   vec3 scale;
 
   u32 layer;
+  i32 render_domain;
+  i32 canvas_anchor;
   b8 active;
   b8 alive;
 

@@ -15,6 +15,22 @@ void egn_scene_shutdown(void);
 
 /** @brief Returns the scene root object (object id 1). */
 EGNAPI void *egn_scene_root(void);
+/** Resolve a live object ID. Returns NULL after the object is destroyed. */
+EGNAPI void *egn_scene_find_object_by_id(u32 id);
+
+// Queries return the total number of distinct objects and copy up to capacity
+// results to out. Ray hits are sorted nearest first, with distance in world units.
+// Bodies are available after the next physics update following scene changes.
+typedef struct EgnPhysicsHit { u32 object_id; f32 distance; } EgnPhysicsHit;
+EGNAPI u32 egn_physics_ray_cast(f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz,
+                                f32 distance, EgnPhysicsHit *out, u32 capacity);
+EGNAPI u32 egn_physics_overlap_sphere(f32 x, f32 y, f32 z, f32 radius,
+                                      EgnPhysicsHit *out, u32 capacity);
+EGNAPI u32 egn_physics_overlap_box(f32 x, f32 y, f32 z, f32 sx, f32 sy, f32 sz,
+                                   EgnPhysicsHit *out, u32 capacity);
+// XY plane at the given Z, with 0.002 units of thickness.
+EGNAPI u32 egn_physics_overlap_circle_2d(f32 x, f32 y, f32 plane_z, f32 radius, EgnPhysicsHit *out, u32 capacity);
+EGNAPI u32 egn_physics_overlap_box_2d(f32 x, f32 y, f32 plane_z, f32 width, f32 height, EgnPhysicsHit *out, u32 capacity);
 
 // ---------------------------------------------------------------------------
 // Objects
@@ -59,6 +75,25 @@ EGNAPI b8 egn_object_is_active(void *object);
 EGNAPI b8 egn_object_is_active_in_hierarchy(void *object);
 
 // ---------------------------------------------------------------------------
+// Canvas hit testing
+// ---------------------------------------------------------------------------
+//
+// Canvas coordinates are pixels measured from the window's top-left corner.
+// These helpers use the same anchor, pivot, scale and transform rules as the
+// canvas renderer, so a hit test matches what the player sees.
+
+// Returns the id of the top-most canvas object under the screen point, or 0.
+EGNAPI u32 egn_canvas_pick(f32 screen_x, f32 screen_y,
+                           f32 framebuffer_width, f32 framebuffer_height);
+
+// Writes the screen-space AABB of every sprite on the object. Returns false
+// when the object has no drawable canvas sprite.
+EGNAPI b8 egn_object_canvas_rect(void *object,
+                                 f32 framebuffer_width, f32 framebuffer_height,
+                                 f32 *out_x, f32 *out_y,
+                                 f32 *out_width, f32 *out_height);
+
+// ---------------------------------------------------------------------------
 // Components
 // ---------------------------------------------------------------------------
 
@@ -66,14 +101,30 @@ EGNAPI b8 egn_object_is_active_in_hierarchy(void *object);
 enum
 {
   EGN_COMPONENT_TYPE_CAMERA = 0,
+  EGN_COMPONENT_TYPE_CAMERA_3D = EGN_COMPONENT_TYPE_CAMERA,
   EGN_COMPONENT_TYPE_MODEL = 1,
   EGN_COMPONENT_TYPE_SPRITE = 2,
   EGN_COMPONENT_TYPE_ANIMATION = 3,
   EGN_COMPONENT_TYPE_LIGHT = 4,
   EGN_COMPONENT_TYPE_RIGIDBODY = 5,
   EGN_COMPONENT_TYPE_COLLIDER = 6,
-  EGN_COMPONENT_TYPE_PARTICLES = 7
+  EGN_COMPONENT_TYPE_PARTICLES = 7,
+  EGN_COMPONENT_TYPE_CAMERA_2D = 8,
+  EGN_COMPONENT_TYPE_CANVAS = 9,
+  EGN_COMPONENT_TYPE_CHARACTER_3D = 10,
+  EGN_COMPONENT_TYPE_CHARACTER_2D = 11
 };
+
+// Independent render domains; each uses the camera layer mask separately.
+enum { EGN_RENDER_3D = 0, EGN_RENDER_2D = 1, EGN_RENDER_CANVAS = 2 };
+// Canvas anchors use rows from bottom to top, columns from left to right.
+enum { EGN_ANCHOR_BOTTOM_LEFT, EGN_ANCHOR_BOTTOM, EGN_ANCHOR_BOTTOM_RIGHT,
+       EGN_ANCHOR_LEFT, EGN_ANCHOR_CENTER, EGN_ANCHOR_RIGHT,
+       EGN_ANCHOR_TOP_LEFT, EGN_ANCHOR_TOP, EGN_ANCHOR_TOP_RIGHT };
+EGNAPI void egn_object_set_render_domain(void *object, i32 domain);
+EGNAPI i32 egn_object_get_render_domain(void *object);
+EGNAPI void egn_object_set_canvas_anchor(void *object, i32 anchor);
+EGNAPI i32 egn_object_get_canvas_anchor(void *object);
 
 // Projection values shared with the V SDK.
 enum
@@ -101,7 +152,8 @@ enum
 {
   EGN_COLLIDER_BOX = 0,
   EGN_COLLIDER_SPHERE = 1,
-  EGN_COLLIDER_MESH = 2
+  EGN_COLLIDER_MESH = 2,
+  EGN_COLLIDER_CAPSULE = 3
 };
 
 EGNAPI void *egn_object_add_camera(void *object, i32 projection,
@@ -113,6 +165,10 @@ EGNAPI void *egn_object_add_camera(void *object, i32 projection,
                                    f32 clear_r, f32 clear_g, f32 clear_b, f32 clear_a,
                                    b8 clear_color, b8 clear_depth,
                                    i32 order, b8 enabled);
+
+// 2D camera uses orthographic world units; canvas uses viewport pixels.
+EGNAPI void *egn_object_add_camera_2d(void *object, f32 ortho_size, u32 layer_mask, i32 order, b8 enabled);
+EGNAPI void *egn_object_add_canvas(void *object, u32 layer_mask, i32 order, b8 enabled);
 
 EGNAPI void *egn_object_add_model(void *object, u32 mesh, u32 texture,
                                   f32 r, f32 g, f32 b, f32 a,
@@ -140,6 +196,13 @@ EGNAPI void *egn_object_add_collider(void *object, i32 shape_type,
                                      f32 radius, u32 mesh,
                                      f32 offset_x, f32 offset_y, f32 offset_z,
                                      b8 enabled);
+
+// Virtual capsule controller; height includes both rounded ends.
+EGNAPI void *egn_object_add_character(void *object, b8 is_2d, f32 radius,
+                                       f32 height, f32 gravity, b8 enabled);
+EGNAPI void egn_character_set_velocity(void *character, f32 x, f32 z);
+EGNAPI void egn_character_jump(void *character, f32 speed);
+EGNAPI b8 egn_character_is_grounded(void *character);
 
 EGNAPI void *egn_object_add_particles(void *object, u32 max_particles, u32 texture,
                                       f32 spawn_rate, f32 lifetime, f32 speed,
@@ -185,10 +248,17 @@ EGNAPI b8 egn_camera_get_clear_depth_enabled(void *camera);
 EGNAPI void egn_camera_set_clear_depth_enabled(void *camera, b8 enabled);
 EGNAPI i32 egn_camera_get_order(void *camera);
 EGNAPI void egn_camera_set_order(void *camera, i32 order);
+// Screen coordinates are pixels from the top left of the framebuffer.
+EGNAPI u32 egn_camera_ray_cast(void *camera, f32 screen_x, f32 screen_y,
+                               f32 framebuffer_width, f32 framebuffer_height,
+                               f32 distance, EgnPhysicsHit *out, u32 capacity);
 
 // Model component ----------------------------------------------------------
 
 EGNAPI u32 egn_model_get_mesh(void *model);
+// Material parameters are stored per model. Currently used by WebGPU shading.
+EGNAPI b8 egn_model_set_pbr(void *model, f32 metallic, f32 roughness);
+EGNAPI void egn_model_get_pbr(void *model, f32 *metallic, f32 *roughness);
 EGNAPI void egn_model_set_mesh(void *model, u32 mesh);
 EGNAPI u32 egn_model_get_texture(void *model);
 EGNAPI void egn_model_set_texture(void *model, u32 texture);

@@ -27,6 +27,36 @@ pub mut:
 	y          int    = 100
 	vsync      bool   = true
 	target_fps int
+	graphics   GraphicsSettings
+}
+
+pub enum GraphicsQuality {
+	low
+	medium
+	high
+}
+
+pub struct GraphicsSettings {
+pub mut:
+	shadows_enabled bool = true
+	shadow_quality GraphicsQuality = .medium
+}
+
+// Applies all graphics options together. Returns false for an invalid quality.
+pub fn set_graphics_settings(settings GraphicsSettings) bool {
+	value := C.RendererGraphicsSettings{
+		shadows_enabled: settings.shadows_enabled
+		shadow_quality: int(settings.shadow_quality)
+	}
+	return C.renderer_set_graphics_settings(&value)
+}
+
+pub fn graphics_settings() GraphicsSettings {
+	value := C.renderer_get_graphics_settings()
+	return GraphicsSettings{
+		shadows_enabled: value.shadows_enabled
+		shadow_quality: unsafe { GraphicsQuality(value.shadow_quality) }
+	}
 }
 
 pub struct Engine {
@@ -42,6 +72,9 @@ mut:
 // logger and memory) and returns a handle to it. The engine does not start its
 // own loop: the game drives frames with frame().
 pub fn create(settings Settings) !Engine {
+	if !set_graphics_settings(settings.graphics) {
+		return error('invalid graphics settings')
+	}
 	mut c_settings := C.EngineSettings{
 		window_name:   settings.title.str
 		window_width:  settings.width
@@ -140,6 +173,28 @@ pub fn (e &Engine) scene() Object {
 	return Object{
 		handle: C.egn_scene_root()
 	}
+}
+
+// object_by_id resolves an active scene object ID, or none after destruction.
+pub fn (e &Engine) object_by_id(id u32) ?Object {
+	h := C.egn_scene_find_object_by_id(id)
+	if h == 0 {
+		return none
+	}
+	return Object{ handle: h }
+}
+
+// canvas_pick returns the top-most canvas object under the given screen point
+// (pixels from the window's top-left corner), or none when nothing was hit.
+// Canvas objects can be created with Object.set_render_domain(.canvas) and
+// Object.set_canvas_anchor(...).
+pub fn (e &Engine) canvas_pick(x f32, y f32) ?Object {
+	width, height := e.window_size()
+	id := C.egn_canvas_pick(x, y, f32(width), f32(height))
+	if id == 0 {
+		return none
+	}
+	return e.object_by_id(id)
 }
 
 // ---------------------------------------------------------------------------

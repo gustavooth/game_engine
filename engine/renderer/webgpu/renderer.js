@@ -4,6 +4,9 @@ import { parseOBJ } from "./loaders/obj.js";
 import { parseGLB } from "./loaders/glb.js";
 const COMPONENT_CAMERA = 0;
 const COMPONENT_MODEL = 1;
+const COMPONENT_SPRITE = 2;
+const COMPONENT_CAMERA_2D = 8;
+const COMPONENT_CANVAS = 9;
 const COMPONENT_ANIMATION = 3;
 const COMPONENT_LIGHT = 4;
 const COMPONENT_PARTICLES = 7;
@@ -11,7 +14,7 @@ const LIGHT_DIRECTIONAL = 0;
 const LIGHT_POINT = 1;
 const SHADOW_SIZE = 2048;
 const GLOBALS_FLOATS = 116;
-const OBJECT_FLOATS = 24;
+const OBJECT_FLOATS = 40;
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -104,6 +107,7 @@ class WebGPURenderer {
   objectGpu = /* @__PURE__ */ new Map();
   cameraGpu = /* @__PURE__ */ new Map();
   particleGpu = /* @__PURE__ */ new Map();
+  animatedGpu = new Map();
   depthTexture;
   depthView;
   shadowTexture;
@@ -126,6 +130,7 @@ class WebGPURenderer {
     this.math = new WasmMath(module);
     this.sceneModule = device.createShaderModule({ code: shaders.scene, label: "egn-scene-shader" });
     this.shadowModule = device.createShaderModule({ code: shaders.shadow, label: "egn-shadow-shader" });
+    const spriteModule = device.createShaderModule({ code: shaders.sprite, label: "egn-sprite-shader" });
     const particleModule = device.createShaderModule({ code: shaders.particle, label: "egn-particle-shader" });
     this.frameLayout = device.createBindGroupLayout({
       label: "egn-frame-layout",
@@ -176,6 +181,16 @@ class WebGPURenderer {
       primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
       depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
     });
+    this.spritePipeline = device.createRenderPipeline({
+      label: "egn-sprite-pipeline",
+      layout: this.mainPipelineLayout,
+      vertex: { module: spriteModule, entryPoint: "vs_main", buffers: vertexBuffers },
+      fragment: { module: spriteModule, entryPoint: "fs_main", targets: [{ format,
+        blend: { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+                 alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } } }] },
+      primitive: { topology: "triangle-list", cullMode: "none" },
+      depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "less-equal" }
+    });
     this.shadowPipeline = device.createRenderPipeline({
       label: "egn-shadow-pipeline",
       layout: this.shadowPipelineLayout,
@@ -184,9 +199,7 @@ class WebGPURenderer {
       depthStencil: {
         format: "depth32float",
         depthWriteEnabled: true,
-        depthCompare: "less",
-        depthBias: 2,
-        depthBiasSlopeScale: 2
+        depthCompare: "less"
       }
     });
     this.particlePipeline = device.createRenderPipeline({
@@ -256,7 +269,7 @@ class WebGPURenderer {
     const texture = this.device.createTexture({
       label: "egn-white-texture",
       size: [1, 1],
-      format: "rgba8unorm-srgb",
+      format: "rgba8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
     });
     this.device.queue.writeTexture({ texture }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4 }, [1, 1]);
@@ -264,6 +277,7 @@ class WebGPURenderer {
     const view = texture.createView();
     this.solidTexture = {
       id: 0,
+      texture,
       view,
       sampler,
       bindGroup: this.device.createBindGroup({
@@ -369,6 +383,18 @@ class WebGPURenderer {
     }
     return this.registerTextureFromBlob(id, await response.blob());
   }
+  registerTexturePixels(id, width, height, pixels) {
+    const texture = this.device.createTexture({ label: `egn-text-${id}`, size: [width, height],
+      format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    this.device.queue.writeTexture({ texture }, pixels, { bytesPerRow: width * 4 }, [width, height]);
+    const view = texture.createView();
+    const sampler = this.device.createSampler({ magFilter: "linear", minFilter: "linear" });
+    const resource = { id, texture, view, sampler, bindGroup: this.device.createBindGroup({
+      layout: this.textureLayout, entries: [{ binding: 0, resource: view }, { binding: 1, resource: sampler }]
+    }) };
+    this.textures.set(id, resource);
+    return resource;
+  }
   async registerTextureFromBlob(id, blob) {
     if (this.textures.has(id)) {
       return this.textures.get(id);
@@ -384,7 +410,7 @@ class WebGPURenderer {
     const texture = this.device.createTexture({
       label: `egn-texture-${id}`,
       size: [bitmap.width, bitmap.height],
-      format: "rgba8unorm-srgb",
+      format: "rgba8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
     });
     this.device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [bitmap.width, bitmap.height]);
@@ -398,6 +424,7 @@ class WebGPURenderer {
     });
     const resource = {
       id,
+      texture,
       view,
       sampler,
       bindGroup: this.device.createBindGroup({
@@ -436,6 +463,7 @@ class WebGPURenderer {
     const m = this.module;
     const models = [];
     const cameras = [];
+    const sprites = [];
     const lights = [];
     const particles = [];
     const scratch = this.scratch;
@@ -444,6 +472,8 @@ class WebGPURenderer {
         return;
       }
       const layer = m._egn_object_get_layer(object);
+      const domain = m._egn_object_get_render_domain(object);
+      const anchor = m._egn_object_get_canvas_anchor(object);
       m._egn_object_get_world_matrix(object, scratch);
       const world = this.floats(scratch, 0, 16);
       const animationHandle = m._egn_object_get_component(object, COMPONENT_ANIMATION);
@@ -463,35 +493,56 @@ class WebGPURenderer {
         if (!component || !m._egn_component_is_enabled(component)) continue;
         m._egn_model_get_color(component, scratch, scratch + 4, scratch + 8, scratch + 12);
         const color = this.floats(scratch, 0, 4);
+        m._egn_model_get_pbr(component, scratch, scratch + 4);
+        const [metallic, roughness] = this.floats(scratch, 0, 2);
         models.push({
           object,
           component,
           layer,
+          domain,
           world: world.slice(),
           mesh: m._egn_model_get_mesh(component),
           texture: m._egn_model_get_texture(component),
           color,
+          metallic,
+          roughness,
           castShadows: !!m._egn_model_get_cast_shadows(component),
           animation,
         });
       }
-      const cameraCount = m._egn_object_component_count(object, COMPONENT_CAMERA);
+      const spriteCount = m._egn_object_component_count(object, COMPONENT_SPRITE);
+      for (let i = 0; i < spriteCount; i++) {
+        const component = m._egn_object_get_component_at(object, COMPONENT_SPRITE, i);
+        if (!component || !m._egn_component_is_enabled(component)) continue;
+        m._egn_sprite_get_size(component, scratch, scratch + 4);
+        const [width, height] = this.floats(scratch, 0, 2);
+        m._egn_sprite_get_pivot(component, scratch, scratch + 4);
+        const [pivotX, pivotY] = this.floats(scratch, 0, 2);
+        m._egn_sprite_get_color(component, scratch, scratch + 4, scratch + 8, scratch + 12);
+        const color = this.floats(scratch, 0, 4);
+        let local = this.math.mat4.translation([(0.5 - pivotX) * width, (0.5 - pivotY) * height, 0]);
+        local = this.math.mat4.multiply(local, this.math.mat4.scaling([width, height, 1]));
+        sprites.push({ component, layer, domain, anchor, width, height, world: this.math.mat4.multiply(world, local),
+          texture: m._egn_sprite_get_texture(component), color, castShadows: false });
+      }
+      for (const cameraType of [COMPONENT_CAMERA, COMPONENT_CAMERA_2D, COMPONENT_CANVAS]) {
+      const cameraCount = m._egn_object_component_count(object, cameraType);
       for (let i = 0; i < cameraCount; i++) {
-        const component = m._egn_object_get_component_at(object, COMPONENT_CAMERA, i);
+        const component = m._egn_object_get_component_at(object, cameraType, i);
         if (!component || !m._egn_component_is_enabled(component)) continue;
         m._egn_camera_get_viewport(component, scratch, scratch + 4, scratch + 8, scratch + 12);
         const viewport = this.floats(scratch, 0, 4);
         m._egn_camera_get_clear_color(component, scratch, scratch + 4, scratch + 8, scratch + 12);
         const clearColor = this.floats(scratch, 0, 4);
-        const view = this.math.mat4.inverse(world);
+        const view = cameraType === COMPONENT_CANVAS ? this.math.mat4.identity() : this.math.mat4.inverse(world);
         const aspect = Math.max(1e-4, viewport[2] * this.canvas.width / Math.max(1, viewport[3] * this.canvas.height));
         const near = m._egn_camera_get_near(component);
         const far = m._egn_camera_get_far(component);
         let projection;
-        if (m._egn_camera_get_projection(component) === 1) {
-          const halfHeight = m._egn_camera_get_ortho_size(component) * 0.5;
+        if (cameraType !== COMPONENT_CAMERA || m._egn_camera_get_projection(component) === 1) {
+          const halfHeight = cameraType === COMPONENT_CANVAS ? viewport[3] * this.canvas.height * 0.5 : m._egn_camera_get_ortho_size(component) * 0.5;
           const halfWidth = halfHeight * aspect;
-          projection = this.math.mat4.ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, near, far);
+          projection = this.math.mat4.ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, cameraType === COMPONENT_CAMERA ? near : -1000, cameraType === COMPONENT_CAMERA ? far : 1000);
         } else {
           projection = this.math.mat4.perspective(m._egn_camera_get_fov(component) * Math.PI / 180, aspect, near, far);
         }
@@ -499,6 +550,9 @@ class WebGPURenderer {
           object,
           component,
           layer,
+          domain: cameraType === COMPONENT_CANVAS ? 2 : cameraType === COMPONENT_CAMERA_2D ? 1 : 0,
+          clearDepth: !!m._egn_camera_get_clear_depth_enabled(component),
+          clearColorEnabled: !!m._egn_camera_get_clear_color_enabled(component),
           layerMask: m._egn_camera_get_layer_mask(component),
           world,
           view,
@@ -507,6 +561,7 @@ class WebGPURenderer {
           clearColor,
           order: m._egn_camera_get_order(component)
         });
+      }
       }
       const lightCount = m._egn_object_component_count(object, COMPONENT_LIGHT);
       for (let i = 0; i < lightCount; i++) {
@@ -572,9 +627,9 @@ class WebGPURenderer {
     };
     walk(m._egn_scene_root());
     cameras.sort((a, b) => a.order - b.order);
-    return { models, cameras, lights, particles };
+    return { models, sprites, cameras, lights, particles };
   }
-  updateMeshAnimation(mesh, item) {
+  updateMeshAnimation(mesh, item, vertexBuffer) {
     if (!mesh.animated || !mesh.data.skin || !mesh.data.animations || !item.animation) {
       return;
     }
@@ -664,7 +719,7 @@ class WebGPURenderer {
       output[vertex * 8 + 6] = base[vertex * 8 + 6];
       output[vertex * 8 + 7] = base[vertex * 8 + 7];
     }
-    this.device.queue.writeBuffer(mesh.vertexBuffer, 0, output);
+    this.device.queue.writeBuffer(vertexBuffer, 0, output);
   }
 
   particleState(item) {
@@ -804,6 +859,8 @@ class WebGPURenderer {
       });
       gpu = {
         buffer,
+        data: new Float32Array(OBJECT_FLOATS),
+        previousWorld: null,
         bindGroup: this.device.createBindGroup({
           layout: this.objectLayout,
           entries: [{ binding: 0, resource: { buffer } }]
@@ -811,10 +868,23 @@ class WebGPURenderer {
       };
       this.objectGpu.set(item.component, gpu);
     }
-    const data = new Float32Array(OBJECT_FLOATS);
-    data.set(item.world, 0);
+    const data = gpu.data;
+    let worldChanged = !gpu.previousWorld;
+    if (!worldChanged) {
+      for (let i = 0; i < 16; i++) {
+        if (gpu.previousWorld[i] !== item.world[i]) { worldChanged = true; break; }
+      }
+    }
+    if (worldChanged) {
+      data.set(item.world, 0);
+      data.set(this.math.mat4.inverse(item.world), 24);
+      if (!gpu.previousWorld) gpu.previousWorld = new Float32Array(16);
+      gpu.previousWorld.set(item.world);
+    }
     data.set(item.color, 16);
     data[20] = item.castShadows ? 1 : 0;
+    data[21] = item.metallic ?? 0;
+    data[22] = item.roughness ?? 1;
     this.device.queue.writeBuffer(gpu.buffer, 0, data);
     return gpu;
   }
@@ -852,7 +922,7 @@ class WebGPURenderer {
       data.set([sun.color[0], sun.color[1], sun.color[2], 0.68], 28);
     }
     data.set(shadowViewProjection, 32);
-    data.set([pointLights.length, shadowEnabled && !!sun?.castShadows ? 1 : 0, 1 / SHADOW_SIZE, 1 / SHADOW_SIZE], 48);
+    data.set([pointLights.length, shadowEnabled && !!sun?.castShadows ? 1 : 0, 1 / SHADOW_SIZE, this.graphicsSettings?.shadowQuality ?? 1], 48);
     for (let i = 0; i < pointLights.length && i < 8; i++) {
       const light = pointLights[i];
       data.set([light.world[12], light.world[13], light.world[14], light.range], 52 + i * 8);
@@ -868,9 +938,9 @@ class WebGPURenderer {
     const direction = this.math.vec3.normalize([sun.world[8], sun.world[9], sun.world[10]]);
     const center = [0, 0, 0];
     const lightPosition = [
-      center[0] - direction[0] * 45,
-      center[1] - direction[1] * 45,
-      center[2] - direction[2] * 45
+      center[0] + direction[0] * 45,
+      center[1] + direction[1] * 45,
+      center[2] + direction[2] * 45
     ];
     let up = [0, 1, 0];
     if (Math.abs(this.math.vec3.dot(direction, up)) > 0.99) {
@@ -883,31 +953,62 @@ class WebGPURenderer {
   render(dt = 1 / 60) {
     this.resize();
     const scene = this.readScene();
+    // Reclaim buffers when components disappear or become inactive.
+    const prune = (cache, items) => {
+      const live = new Set(items.map((item) => item.component));
+      for (const [key, value] of cache) {
+        if (!live.has(key)) {
+          value.buffer.destroy();
+          cache.delete(key);
+        }
+      }
+    };
+    const spriteInstances = scene.sprites.flatMap((sprite) => scene.cameras
+      .filter((camera) => camera.domain === 2 && sprite.domain === 2)
+      .map((camera) => ({ component: `${sprite.component}:${camera.component}` })));
+    prune(this.objectGpu, [...scene.models, ...scene.sprites, ...spriteInstances]);
+    prune(this.cameraGpu, scene.cameras);
+    prune(this.particleGpu, scene.particles);
+    prune(this.animatedGpu, scene.models.filter((item) => item.animation && this.meshes.get(item.mesh)?.animated));
     for (const emitter of scene.particles) {
       this.simulateParticles(emitter, dt);
     }
     const sun = scene.lights.find((light) => light.type === LIGHT_DIRECTIONAL);
     const pointLights = scene.lights.filter((light) => light.type === LIGHT_POINT).slice(0, 8);
-    const camera = scene.cameras[0];
+    const camera = scene.cameras.find((camera) => camera.domain === 0) ?? scene.cameras[0];
     if (!camera || !this.depthView) {
       return;
     }
     const shadowViewProjection = this.computeShadow(camera, sun);
-    const shadowEnabled = !!sun?.castShadows;
+    const shadowEnabled = (this.graphicsSettings?.shadowsEnabled ?? true) && !!sun?.castShadows;
     this.device.queue.writeBuffer(this.shadowGlobals, 0, shadowViewProjection);
     this.stats.objects = scene.models.length;
     this.stats.cameras = scene.cameras.length;
     this.stats.drawCalls = 0;
     this.stats.shadowCasters = 0;
-    const animatedMeshes = new Set();
     for (const item of scene.models) {
       const mesh = this.meshes.get(item.mesh);
-      if (mesh && item.animation && !animatedMeshes.has(item.mesh)) {
-        this.updateMeshAnimation(mesh, item);
-        animatedMeshes.add(item.mesh);
+      if (mesh?.animated && item.animation) {
+        let animation = this.animatedGpu.get(item.component);
+        if (animation && animation.mesh !== item.mesh) {
+          animation.buffer.destroy();
+          this.animatedGpu.delete(item.component);
+          animation = null;
+        }
+        if (!animation) {
+          animation = { mesh: item.mesh, buffer: this.device.createBuffer({
+            label: `egn-animated-${item.component}`,
+            size: Math.max(16, mesh.baseVertices.byteLength),
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+          }) };
+          this.device.queue.writeBuffer(animation.buffer, 0, mesh.baseVertices);
+          this.animatedGpu.set(item.component, animation);
+        }
+        this.updateMeshAnimation(mesh, item, animation.buffer);
       }
       this.objectBuffer(item);
     }
+    for (const sprite of scene.sprites) this.objectBuffer(sprite);
     const encoder = this.device.createCommandEncoder({ label: "egn-frame" });
     if (shadowEnabled) {
       const pass = encoder.beginRenderPass({
@@ -923,12 +1024,12 @@ class WebGPURenderer {
       pass.setPipeline(this.shadowPipeline);
       pass.setBindGroup(0, this.shadowBindGroup);
       for (const item of scene.models) {
-        if (!item.castShadows) continue;
+        if (!item.castShadows || item.domain !== 0) continue;
         const mesh = this.meshes.get(item.mesh);
         const objectGpu = this.objectGpu.get(item.component);
         if (!mesh || !objectGpu) continue;
         pass.setBindGroup(1, objectGpu.bindGroup);
-        pass.setVertexBuffer(0, mesh.vertexBuffer);
+        pass.setVertexBuffer(0, this.animatedGpu.get(item.component)?.buffer ?? mesh.vertexBuffer);
         pass.setIndexBuffer(mesh.indexBuffer, "uint32");
         pass.drawIndexed(mesh.indexCount);
         this.stats.shadowCasters++;
@@ -950,13 +1051,13 @@ class WebGPURenderer {
         colorAttachments: [{
           view: this.context.getCurrentTexture().createView(),
           clearValue: { r: cam.clearColor[0], g: cam.clearColor[1], b: cam.clearColor[2], a: cam.clearColor[3] },
-          loadOp: first ? "clear" : "load",
+          loadOp: first || cam.clearColorEnabled ? "clear" : "load",
           storeOp: "store"
         }],
         depthStencilAttachment: {
           view: this.depthView,
           depthClearValue: 1,
-          depthLoadOp: first ? "clear" : "load",
+          depthLoadOp: first || cam.clearDepth ? "clear" : "load",
           depthStoreOp: "store"
         }
       });
@@ -965,21 +1066,23 @@ class WebGPURenderer {
       pass.setPipeline(this.mainPipeline);
       pass.setBindGroup(0, frameBindGroups.get(cam));
       for (const item of scene.models) {
+        if (cam.domain !== 0 || item.domain !== 0) continue;
         const layerVisible = item.layer < 32 && (cam.layerMask & 1 << item.layer) !== 0;
         if (!layerVisible) continue;
         const mesh = this.meshes.get(item.mesh);
         const objectGpu = this.objectGpu.get(item.component);
         if (!mesh || !objectGpu) continue;
-        const texture = this.textures.get(item.texture) ?? this.solidTexture;
+        const texture = this.textures.get(item.texture || mesh.defaultTexture) ?? this.solidTexture;
         pass.setBindGroup(1, objectGpu.bindGroup);
         pass.setBindGroup(2, texture.bindGroup);
-        pass.setVertexBuffer(0, mesh.vertexBuffer);
+        pass.setVertexBuffer(0, this.animatedGpu.get(item.component)?.buffer ?? mesh.vertexBuffer);
         pass.setIndexBuffer(mesh.indexBuffer, "uint32");
         pass.drawIndexed(mesh.indexCount);
         this.stats.drawCalls++;
       }
 
       for (const emitter of scene.particles) {
+        if (cam.domain !== 0) continue;
         const layerVisible = emitter.layer < 32 && (cam.layerMask & (1 << emitter.layer)) !== 0;
         if (!layerVisible) continue;
         const count = this.buildParticleVertices(emitter, cam);
@@ -994,6 +1097,28 @@ class WebGPURenderer {
         this.stats.drawCalls++;
       }
 
+      {
+        pass.setPipeline(this.spritePipeline);
+        pass.setBindGroup(0, frameBindGroups.get(cam));
+        for (const sprite of scene.sprites) {
+          if (sprite.domain !== cam.domain || sprite.layer >= 32 || !(cam.layerMask & (1 << sprite.layer))) continue;
+          let item = sprite;
+          if (cam.domain === 2) {
+            const ax = (sprite.anchor % 3 - 1) * width * 0.5;
+            const ay = (Math.floor(sprite.anchor / 3) - 1) * height * 0.5;
+            item = { ...sprite, component: `${sprite.component}:${cam.component}`, world: this.math.mat4.multiply(this.math.mat4.translation([ax, ay, 0]), sprite.world) };
+          }
+          const gpu = this.objectBuffer(item);
+          const mesh = this.meshes.get(3);
+          const texture = this.textures.get(sprite.texture) ?? this.solidTexture;
+          pass.setBindGroup(1, gpu.bindGroup);
+          pass.setBindGroup(2, texture.bindGroup);
+          pass.setVertexBuffer(0, mesh.vertexBuffer);
+          pass.setIndexBuffer(mesh.indexBuffer, "uint32");
+          pass.drawIndexed(mesh.indexCount);
+          this.stats.drawCalls++;
+        }
+      }
       pass.end();
       first = false;
     }
@@ -1002,18 +1127,21 @@ class WebGPURenderer {
   destroy() {
     this.depthTexture?.destroy();
     this.shadowTexture?.destroy();
-    this.module._free(this.scratch);
+    this.shadowGlobals?.destroy();
+    if (this.scratch) this.module._free(this.scratch);
+    this.scratch = 0;
+    this.math.destroy();
     for (const mesh of this.meshes.values()) {
       mesh.vertexBuffer.destroy();
       mesh.indexBuffer.destroy();
     }
-    for (const texture of this.textures.values()) {
-      texture.view = void 0;
+    for (const texture of this.textures.values()) texture.texture.destroy();
+    for (const cache of [this.objectGpu, this.cameraGpu, this.particleGpu, this.animatedGpu]) {
+      for (const resource of cache.values()) resource.buffer.destroy();
+      cache.clear();
     }
     this.meshes.clear();
     this.textures.clear();
-    this.objectGpu.clear();
-    this.cameraGpu.clear();
   }
 }
 export {

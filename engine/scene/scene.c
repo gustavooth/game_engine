@@ -48,6 +48,7 @@ static EgnObject *allocate_object(void)
   object->rotation = quat_identity();
   object->scale = vec3_one();
   object->active = true;
+  object->canvas_anchor = EGN_ANCHOR_CENTER;
   object->alive = true;
   object->world_dirty = true;
   object->world_matrix = mat4_identity();
@@ -230,57 +231,20 @@ b8 egn_scene_initialize(void)
   set_name_internal(scene.root, "Scene");
   egn_object_mark_world_dirty(scene.root);
 
-  EgnObject *camera_object = egn_object_create(scene.root, "Main Camera");
-  if (!camera_object)
-  {
-    egn_scene_shutdown();
-    return false;
-  }
-
-  camera_object->position = vec3_create(0.0f, 1.5f, 4.5f);
-  egn_object_mark_world_dirty(camera_object);
-  egn_object_look_at(camera_object, 0.0f, 0.0f, 0.0f);
-
-  EgnComponent *camera = egn_object_add_camera(
-      camera_object,
-      EGN_PROJECTION_PERSPECTIVE,
-      60.0f, 10.0f, 0.1f, 1000.0f,
-      0.0f, 0.0f, 1.0f, 1.0f,
-      0xFFFFFFFFu,
-      0.0f, 0.0f, 0.1f, 1.0f,
-      true, true,
-      0, true);
-
-  if (!camera)
-  {
-    egn_scene_shutdown();
-    return false;
-  }
-
-  EgnObject *sun_object = egn_object_create(scene.root, "Sun");
-  if (!sun_object)
-  {
-    egn_scene_shutdown();
-    return false;
-  }
-
-  sun_object->position = vec3_create(0.0f, 10.0f, 0.0f);
-  sun_object->rotation = quat_from_euler_xyz(deg_to_rad(-50.0f), deg_to_rad(-30.0f), 0.0f);
-  egn_object_mark_world_dirty(sun_object);
-
-  EgnComponent *sun = egn_object_add_light(
-      sun_object, EGN_LIGHT_DIRECTIONAL,
-      1.0f, 0.95f, 0.85f, 1.0f, 0.0f, true, true);
-
-  if (!sun)
-  {
-    egn_scene_shutdown();
-    return false;
-  }
-
   scene_initialized = true;
   EGNINFO("Scene initialized (root object id 1)");
   return true;
+}
+
+void *egn_scene_find_object_by_id(u32 id)
+{
+  if (!id) return 0;
+  for (u32 i = 0; i < scene.object_count; ++i)
+  {
+    EgnObject *object = scene.objects[i];
+    if (object && object->alive && object->id == id) return object;
+  }
+  return 0;
 }
 
 void egn_scene_shutdown(void)
@@ -673,4 +637,373 @@ void egn_scene_update(f64 delta_time)
     return;
 
   scene_update_object(scene.root, delta_time);
+}
+
+void egn_object_set_render_domain(void *handle, i32 domain)
+{
+  EgnObject *object = egn_object_from_handle(handle);
+  if (object && domain >= EGN_RENDER_3D && domain <= EGN_RENDER_CANVAS)
+    object->render_domain = domain;
+}
+i32 egn_object_get_render_domain(void *handle)
+{
+  EgnObject *object = egn_object_from_handle(handle);
+  return object ? object->render_domain : EGN_RENDER_3D;
+}
+void egn_object_set_canvas_anchor(void *handle, i32 anchor)
+{
+  EgnObject *object = egn_object_from_handle(handle);
+  if (object && anchor >= EGN_ANCHOR_BOTTOM_LEFT && anchor <= EGN_ANCHOR_TOP_RIGHT)
+    object->canvas_anchor = anchor;
+}
+i32 egn_object_get_canvas_anchor(void *handle)
+{
+  EgnObject *object = egn_object_from_handle(handle);
+  return object ? object->canvas_anchor : EGN_ANCHOR_CENTER;
+}
+
+// ---------------------------------------------------------------------------
+// Canvas hit testing
+// ---------------------------------------------------------------------------
+
+static f32 canvas_clampf(f32 value, f32 min_value, f32 max_value)
+{
+  if (value < min_value)
+    return min_value;
+  if (value > max_value)
+    return max_value;
+  return value;
+}
+
+typedef struct CanvasCameraQuery
+{
+  EgnComponent *best;
+  b8 has_best;
+  i32 order;
+  u32 sequence;
+} CanvasCameraQuery;
+
+static void canvas_find_camera_recursive(EgnObject *object, CanvasCameraQuery *query,
+                                         u32 *sequence)
+{
+  if (!object || !object->alive || !object->active)
+    return;
+
+  for (EgnComponent *component = object->first_component; component;
+       component = component->next)
+  {
+    if (!component->alive || !component->enabled ||
+        component->type != EGN_COMPONENT_TYPE_CANVAS)
+      continue;
+
+    u32 current_sequence = (*sequence)++;
+    i32 order = component->data.camera.order;
+    if (!query->has_best || order > query->order ||
+        (order == query->order && current_sequence > query->sequence))
+    {
+      query->best = component;
+      query->has_best = true;
+      query->order = order;
+      query->sequence = current_sequence;
+    }
+  }
+
+  for (EgnObject *child = object->first_child; child; child = child->next_sibling)
+    canvas_find_camera_recursive(child, query, sequence);
+}
+
+static EgnComponent *canvas_top_camera(void)
+{
+  EgnScene *scene_state = egn_scene_get();
+  if (!scene_state || !scene_state->root)
+    return 0;
+
+  CanvasCameraQuery query = {0};
+  u32 sequence = 0;
+  canvas_find_camera_recursive(scene_state->root, &query, &sequence);
+  return query.best;
+}
+
+static b8 canvas_viewport_pixels(const EgnCameraData *camera,
+                                 f32 framebuffer_width, f32 framebuffer_height,
+                                 f32 *out_x, f32 *out_y,
+                                 f32 *out_width, f32 *out_height)
+{
+  if (!camera || !out_x || !out_y || !out_width || !out_height)
+    return false;
+  if (framebuffer_width <= 0.0f || framebuffer_height <= 0.0f)
+    return false;
+
+  f32 x = canvas_clampf(camera->viewport_x, 0.0f, 1.0f);
+  f32 y = canvas_clampf(camera->viewport_y, 0.0f, 1.0f);
+  f32 width = canvas_clampf(camera->viewport_width, 0.0f, 1.0f - x);
+  f32 height = canvas_clampf(camera->viewport_height, 0.0f, 1.0f - y);
+
+  if (width <= 0.0f || height <= 0.0f)
+    return false;
+
+  f32 pixel_x = x * framebuffer_width;
+  f32 pixel_y = y * framebuffer_height;
+  f32 pixel_width = width * framebuffer_width;
+  f32 pixel_height = height * framebuffer_height;
+
+  if (pixel_x >= framebuffer_width)
+    pixel_x = framebuffer_width - 1.0f;
+  if (pixel_y >= framebuffer_height)
+    pixel_y = framebuffer_height - 1.0f;
+
+  if (pixel_width < 1.0f)
+    pixel_width = 1.0f;
+  if (pixel_height < 1.0f)
+    pixel_height = 1.0f;
+
+  if (pixel_x + pixel_width > framebuffer_width)
+    pixel_width = framebuffer_width - pixel_x;
+  if (pixel_y + pixel_height > framebuffer_height)
+    pixel_height = framebuffer_height - pixel_y;
+
+  *out_x = pixel_x;
+  *out_y = pixel_y;
+  *out_width = pixel_width;
+  *out_height = pixel_height;
+  return true;
+}
+
+static void canvas_anchor_offset(const EgnObject *object, f32 viewport_width,
+                                 f32 viewport_height, f32 *out_x, f32 *out_y)
+{
+  i32 anchor = object ? object->canvas_anchor : EGN_ANCHOR_CENTER;
+  *out_x = (f32)((anchor % 3) - 1) * viewport_width * 0.5f;
+  *out_y = (f32)((anchor / 3) - 1) * viewport_height * 0.5f;
+}
+
+static void canvas_transform_point(const mat4 *world, f32 local_x, f32 local_y,
+                                   f32 anchor_x, f32 anchor_y,
+                                   f32 viewport_x, f32 viewport_y,
+                                   f32 viewport_width, f32 viewport_height,
+                                   f32 *out_x, f32 *out_y)
+{
+  const f32 *m = world->data;
+  f32 canvas_x = m[0] * local_x + m[4] * local_y + m[12] + anchor_x;
+  f32 canvas_y = m[1] * local_x + m[5] * local_y + m[13] + anchor_y;
+
+  // The canvas projection maps the viewport centre to (0, 0) and +Y upwards,
+  // while screen coordinates start at the top-left corner and grow downwards.
+  *out_x = viewport_x + (canvas_x + viewport_width * 0.5f);
+  *out_y = viewport_y + (viewport_height * 0.5f - canvas_y);
+}
+
+static void canvas_sprite_quad(const EgnObject *object, const EgnSpriteData *sprite,
+                               const mat4 *world,
+                               f32 viewport_x, f32 viewport_y,
+                               f32 viewport_width, f32 viewport_height,
+                               f32 out_x[4], f32 out_y[4])
+{
+  f32 anchor_x = 0.0f;
+  f32 anchor_y = 0.0f;
+  canvas_anchor_offset(object, viewport_width, viewport_height, &anchor_x, &anchor_y);
+
+  f32 center_x = (0.5f - sprite->pivot_x) * sprite->width;
+  f32 center_y = (0.5f - sprite->pivot_y) * sprite->height;
+  f32 half_width = sprite->width * 0.5f;
+  f32 half_height = sprite->height * 0.5f;
+
+  f32 local_x[4] = {
+      center_x - half_width,
+      center_x + half_width,
+      center_x + half_width,
+      center_x - half_width,
+  };
+  f32 local_y[4] = {
+      center_y - half_height,
+      center_y - half_height,
+      center_y + half_height,
+      center_y + half_height,
+  };
+
+  for (i32 i = 0; i < 4; i++)
+  {
+    canvas_transform_point(world, local_x[i], local_y[i], anchor_x, anchor_y,
+                           viewport_x, viewport_y, viewport_width, viewport_height,
+                           &out_x[i], &out_y[i]);
+  }
+}
+
+static b8 canvas_point_in_quad(f32 point_x, f32 point_y,
+                               const f32 quad_x[4], const f32 quad_y[4])
+{
+  b8 has_negative = false;
+  b8 has_positive = false;
+
+  for (i32 i = 0; i < 4; i++)
+  {
+    i32 next = (i + 1) & 3;
+    f32 cross = (quad_x[next] - quad_x[i]) * (point_y - quad_y[i]) -
+                (quad_y[next] - quad_y[i]) * (point_x - quad_x[i]);
+    if (cross < -0.001f)
+      has_negative = true;
+    if (cross > 0.001f)
+      has_positive = true;
+  }
+
+  return !(has_negative && has_positive);
+}
+
+static void canvas_pick_recursive(EgnObject *object, const EgnCameraData *camera,
+                                  f32 viewport_x, f32 viewport_y,
+                                  f32 viewport_width, f32 viewport_height,
+                                  f32 point_x, f32 point_y, u32 *hit)
+{
+  if (!object || !object->alive || !object->active)
+    return;
+
+  b8 layer_visible = object->render_domain == EGN_RENDER_CANVAS &&
+                     object->layer < EGN_SCENE_MAX_LAYERS &&
+                     (camera->layer_mask & (1u << object->layer)) != 0;
+
+  if (layer_visible)
+  {
+    mat4 world;
+    b8 world_ready = false;
+
+    for (EgnComponent *component = object->first_component; component;
+         component = component->next)
+    {
+      if (!component->alive || !component->enabled ||
+          component->type != EGN_COMPONENT_TYPE_SPRITE)
+        continue;
+
+      EgnSpriteData *sprite = &component->data.sprite;
+      if (sprite->width <= 0.0f || sprite->height <= 0.0f)
+        continue;
+
+      if (!world_ready)
+      {
+        egn_object_get_world_matrix_internal(object, &world);
+        world_ready = true;
+      }
+
+      f32 quad_x[4];
+      f32 quad_y[4];
+      canvas_sprite_quad(object, sprite, &world, viewport_x, viewport_y,
+                         viewport_width, viewport_height, quad_x, quad_y);
+
+      if (canvas_point_in_quad(point_x, point_y, quad_x, quad_y))
+        *hit = object->id;
+    }
+  }
+
+  for (EgnObject *child = object->first_child; child; child = child->next_sibling)
+    canvas_pick_recursive(child, camera, viewport_x, viewport_y,
+                          viewport_width, viewport_height, point_x, point_y, hit);
+}
+
+EGNAPI u32 egn_canvas_pick(f32 screen_x, f32 screen_y,
+                           f32 framebuffer_width, f32 framebuffer_height)
+{
+  EgnComponent *camera_component = canvas_top_camera();
+  if (!camera_component)
+    return 0;
+
+  f32 viewport_x = 0.0f;
+  f32 viewport_y = 0.0f;
+  f32 viewport_width = 0.0f;
+  f32 viewport_height = 0.0f;
+  if (!canvas_viewport_pixels(&camera_component->data.camera,
+                              framebuffer_width, framebuffer_height,
+                              &viewport_x, &viewport_y,
+                              &viewport_width, &viewport_height))
+    return 0;
+
+  EgnScene *scene_state = egn_scene_get();
+  if (!scene_state || !scene_state->root)
+    return 0;
+
+  u32 hit = 0;
+  canvas_pick_recursive(scene_state->root, &camera_component->data.camera,
+                        viewport_x, viewport_y, viewport_width, viewport_height,
+                        screen_x, screen_y, &hit);
+  return hit;
+}
+
+EGNAPI b8 egn_object_canvas_rect(void *object_handle,
+                                 f32 framebuffer_width, f32 framebuffer_height,
+                                 f32 *out_x, f32 *out_y,
+                                 f32 *out_width, f32 *out_height)
+{
+  EgnObject *object = egn_object_from_handle(object_handle);
+  if (!object || !out_x || !out_y || !out_width || !out_height)
+    return false;
+  if (object->render_domain != EGN_RENDER_CANVAS)
+    return false;
+
+  EgnComponent *camera_component = canvas_top_camera();
+  if (!camera_component)
+    return false;
+
+  f32 viewport_x = 0.0f;
+  f32 viewport_y = 0.0f;
+  f32 viewport_width = 0.0f;
+  f32 viewport_height = 0.0f;
+  if (!canvas_viewport_pixels(&camera_component->data.camera,
+                              framebuffer_width, framebuffer_height,
+                              &viewport_x, &viewport_y,
+                              &viewport_width, &viewport_height))
+    return false;
+
+  mat4 world;
+  egn_object_get_world_matrix_internal(object, &world);
+
+  b8 has_rect = false;
+  f32 min_x = 0.0f;
+  f32 min_y = 0.0f;
+  f32 max_x = 0.0f;
+  f32 max_y = 0.0f;
+
+  for (EgnComponent *component = object->first_component; component;
+       component = component->next)
+  {
+    if (!component->alive || !component->enabled ||
+        component->type != EGN_COMPONENT_TYPE_SPRITE)
+      continue;
+
+    EgnSpriteData *sprite = &component->data.sprite;
+    if (sprite->width <= 0.0f || sprite->height <= 0.0f)
+      continue;
+
+    f32 quad_x[4];
+    f32 quad_y[4];
+    canvas_sprite_quad(object, sprite, &world, viewport_x, viewport_y,
+                       viewport_width, viewport_height, quad_x, quad_y);
+
+    for (i32 i = 0; i < 4; i++)
+    {
+      if (!has_rect)
+      {
+        min_x = max_x = quad_x[i];
+        min_y = max_y = quad_y[i];
+        has_rect = true;
+      }
+      else
+      {
+        if (quad_x[i] < min_x)
+          min_x = quad_x[i];
+        if (quad_x[i] > max_x)
+          max_x = quad_x[i];
+        if (quad_y[i] < min_y)
+          min_y = quad_y[i];
+        if (quad_y[i] > max_y)
+          max_y = quad_y[i];
+      }
+    }
+  }
+
+  if (!has_rect)
+    return false;
+
+  *out_x = min_x;
+  *out_y = min_y;
+  *out_width = max_x - min_x;
+  *out_height = max_y - min_y;
+  return true;
 }

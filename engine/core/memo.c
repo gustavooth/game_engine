@@ -56,21 +56,31 @@ void *memo_allocate(u64 size, MemoTag tag)
     EGNWARN("memo_allocate called using MEMO_TAG_UNKNOWN.");
 #endif
 
-  if (state_ptr)
+  if (size > (u64)-1 - sizeof(MemoryData) || ((u32)tag >= MEMO_TAG_MAX_TAGS && tag != MEMO_NOT_INITIALIZED))
+    return 0;
+  MemoryData *block = (MemoryData *)platform_allocate(sizeof(MemoryData) + size, false);
+  if (!block) return 0;
+  block->tag = tag;
+  block->length = size;
+  if (state_ptr && tag != MEMO_NOT_INITIALIZED)
   {
     state_ptr->tagged_allocations[tag] += size + sizeof(MemoryData);
     state_ptr->alloc_count++;
   }
 
-  MemoryData *block = (MemoryData *)platform_allocate(sizeof(MemoryData) + size, false);
-  block->tag = tag;
-  block->length = size;
-
   return (void *)(block + 1);
+}
+
+void *memo_allocate_zero(u64 size, MemoTag tag)
+{
+  void *block = memo_allocate(size, tag);
+  if (block) platform_set_memory(block, 0, size);
+  return block;
 }
 
 void memo_free(void *block)
 {
+  if (!block) return;
   MemoryData *data = ((MemoryData *)block) - 1;
 
 #if LOG_WARN_ENABLED == 1
@@ -78,7 +88,7 @@ void memo_free(void *block)
     EGNWARN("memo_free called using MEMO_TAG_UNKNOWN.");
 #endif
 
-  if (state_ptr)
+  if (state_ptr && data->tag != MEMO_NOT_INITIALIZED)
   {
     state_ptr->tagged_allocations[data->tag] -= data->length + sizeof(MemoryData);
     state_ptr->alloc_count--;
@@ -118,6 +128,7 @@ b8 memo_write_memory_usage_str(char *str, u64 str_len)
   const char *title = "Core memory usage (tagged):\n";
   u64 title_len = string_length(title);
   title_len++; // "/n"
+  if (!str || str_len < title_len || !state_ptr) return false;
   MEMOCPY(str, title, title_len);
   u64 offset = title_len - 1;
 
@@ -169,7 +180,7 @@ b8 memo_write_memory_usage_str(char *str, u64 str_len)
   }
 
   u32 written_chars;
-  string_format2(str+offset, str_len - offset, &written_chars, "ALLOCATIONS COUNT  : %llu\0", state_ptr->alloc_count);
+  if (!string_format2(str+offset, str_len - offset, &written_chars, "ALLOCATIONS COUNT  : %llu", state_ptr->alloc_count)) return false;
   offset += written_chars;
 
   return true;

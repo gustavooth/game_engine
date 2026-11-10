@@ -4,6 +4,7 @@
 #include "core/memo.h"
 
 #include <string.h>
+#include <math.h>
 
 static b8 ensure_component_capacity(void)
 {
@@ -67,7 +68,9 @@ static EgnComponent *allocate_component(EgnObject *owner, i32 type)
 static EgnCameraData *camera_data(void *handle)
 {
   EgnComponent *component = egn_component_from_handle(handle);
-  if (!component || component->type != EGN_COMPONENT_TYPE_CAMERA)
+  if (!component || (component->type != EGN_COMPONENT_TYPE_CAMERA &&
+                     component->type != EGN_COMPONENT_TYPE_CAMERA_2D &&
+                     component->type != EGN_COMPONENT_TYPE_CANVAS))
     return 0;
   return &component->data.camera;
 }
@@ -189,6 +192,21 @@ void *egn_object_add_camera(void *object_handle, i32 projection,
   return component;
 }
 
+void *egn_object_add_camera_2d(void *object, f32 ortho_size, u32 layer_mask, i32 order, b8 enabled)
+{
+  EgnComponent *component = egn_object_add_camera(object, EGN_PROJECTION_ORTHOGRAPHIC,
+      60, ortho_size, 0.1f, 1000, 0, 0, 1, 1, layer_mask,
+      0, 0, 0, 0, false, true, order, enabled);
+  if (component) component->type = EGN_COMPONENT_TYPE_CAMERA_2D;
+  return component;
+}
+void *egn_object_add_canvas(void *object, u32 layer_mask, i32 order, b8 enabled)
+{
+  EgnComponent *component = egn_object_add_camera_2d(object, 10, layer_mask, order, enabled);
+  if (component) component->type = EGN_COMPONENT_TYPE_CANVAS;
+  return component;
+}
+
 void *egn_object_add_model(void *object_handle, u32 mesh, u32 texture,
                            f32 r, f32 g, f32 b, f32 a,
                            b8 cast_shadows, b8 enabled)
@@ -208,6 +226,8 @@ void *egn_object_add_model(void *object_handle, u32 mesh, u32 texture,
   model->g = g;
   model->b = b;
   model->a = a;
+  model->metallic = 0.0f;
+  model->roughness = 1.0f;
   model->cast_shadows = cast_shadows;
 
   component->enabled = enabled;
@@ -260,7 +280,8 @@ void *egn_object_add_collider(void *object_handle, i32 shape_type,
 
   EgnColliderData *collider = &component->data.collider;
   collider->shape_type = (shape_type == EGN_COLLIDER_SPHERE ||
-                          shape_type == EGN_COLLIDER_MESH)
+                          shape_type == EGN_COLLIDER_MESH ||
+                          shape_type == EGN_COLLIDER_CAPSULE)
                              ? shape_type
                              : EGN_COLLIDER_BOX;
   collider->size_x = size_x > 0.0f ? size_x : 1.0f;
@@ -277,6 +298,43 @@ void *egn_object_add_collider(void *object_handle, i32 shape_type,
 
   component->enabled = enabled;
   return component;
+}
+
+void *egn_object_add_character(void *object_handle, b8 is_2d, f32 radius,
+                                f32 height, f32 gravity, b8 enabled)
+{
+  EgnObject *object = egn_object_from_handle(object_handle);
+  if (!object || !isfinite(radius) || !isfinite(height) || !isfinite(gravity) ||
+      radius <= 0 || height <= 2 * radius || gravity < 0) return 0;
+  EgnComponent *component = allocate_component(object, is_2d ? EGN_COMPONENT_TYPE_CHARACTER_2D : EGN_COMPONENT_TYPE_CHARACTER_3D);
+  if (!component) return 0;
+  component->data.character.radius = radius;
+  component->data.character.height = height;
+  component->data.character.gravity = gravity;
+  component->enabled = enabled;
+  return component;
+}
+static EgnCharacterData *character_data(void *handle)
+{
+  EgnComponent *component = egn_component_from_handle(handle);
+  if (!component || (component->type != EGN_COMPONENT_TYPE_CHARACTER_2D &&
+                     component->type != EGN_COMPONENT_TYPE_CHARACTER_3D)) return 0;
+  return &component->data.character;
+}
+void egn_character_set_velocity(void *handle, f32 x, f32 z)
+{
+  EgnCharacterData *c = character_data(handle);
+  if (c && isfinite(x) && isfinite(z)) { c->velocity_x = x; c->velocity_z = z; }
+}
+void egn_character_jump(void *handle, f32 speed)
+{
+  EgnCharacterData *c = character_data(handle);
+  if (c && c->grounded && isfinite(speed) && speed > 0) c->jump_speed = speed;
+}
+b8 egn_character_is_grounded(void *handle)
+{
+  EgnCharacterData *c = character_data(handle);
+  return c && c->grounded;
 }
 
 void *egn_object_add_particles(void *object_handle, u32 max_particles, u32 texture,
@@ -695,6 +753,25 @@ void egn_camera_set_order(void *camera, i32 order)
 }
 
 // Model ---------------------------------------------------------------------
+
+b8 egn_model_set_pbr(void *model, f32 metallic, f32 roughness)
+{
+  EgnModelData *data = model_data(model);
+  /* This form rejects NaN as well as values outside the valid range. */
+  if (!data || !(metallic >= 0.0f && metallic <= 1.0f) ||
+      !(roughness >= 0.0f && roughness <= 1.0f))
+    return false;
+  data->metallic = metallic;
+  data->roughness = roughness;
+  return true;
+}
+
+void egn_model_get_pbr(void *model, f32 *metallic, f32 *roughness)
+{
+  EgnModelData *data = model_data(model);
+  if (metallic) *metallic = data ? data->metallic : 0.0f;
+  if (roughness) *roughness = data ? data->roughness : 1.0f;
+}
 
 u32 egn_model_get_mesh(void *model)
 {
@@ -1160,7 +1237,8 @@ void egn_collider_set_shape(void *collider, i32 shape_type)
   if (!data)
     return;
   data->shape_type = (shape_type == EGN_COLLIDER_SPHERE ||
-                      shape_type == EGN_COLLIDER_MESH)
+                      shape_type == EGN_COLLIDER_MESH ||
+                          shape_type == EGN_COLLIDER_CAPSULE)
                          ? shape_type
                          : EGN_COLLIDER_BOX;
   data->dirty = true;
@@ -1445,4 +1523,56 @@ void egn_particles_emit(void *particles, u32 count)
   EgnParticleData *data = particles_data(particles);
   if (data)
     data->burst += (f32)count;
+}
+
+
+u32 egn_camera_ray_cast(void *handle, f32 screen_x, f32 screen_y,
+                        f32 width, f32 height, f32 distance,
+                        EgnPhysicsHit *out, u32 capacity)
+{
+  EgnComponent *component = egn_component_from_handle(handle);
+  EgnCameraData *camera = camera_data(handle);
+  if (!component || !camera || !component->enabled || !component->owner ||
+      !egn_object_is_active_in_hierarchy(component->owner) ||
+      !isfinite(width) || !isfinite(height) || width <= 0 || height <= 0 ||
+      !isfinite(screen_x) || !isfinite(screen_y)) return 0;
+  f32 viewport_x = camera->viewport_x * width;
+  f32 viewport_y = (1.0f - camera->viewport_y - camera->viewport_height) * height;
+  f32 viewport_width = camera->viewport_width * width;
+  f32 viewport_height = camera->viewport_height * height;
+  if (viewport_width <= 0 || viewport_height <= 0 || screen_x < viewport_x ||
+      screen_x >= viewport_x + viewport_width || screen_y < viewport_y ||
+      screen_y >= viewport_y + viewport_height) return 0;
+  f32 nx = 2.0f * (screen_x - viewport_x) / viewport_width - 1.0f;
+  f32 ny = 1.0f - 2.0f * (screen_y - viewport_y) / viewport_height;
+  f32 aspect = viewport_width / viewport_height;
+  vec3 origin = vec3_zero();
+  vec3 direction = vec3_create(0, 0, -1);
+  if (camera->projection == EGN_PROJECTION_ORTHOGRAPHIC)
+  {
+    origin.x = nx * camera->ortho_size * aspect * 0.5f;
+    origin.y = ny * camera->ortho_size * 0.5f;
+    origin.z = -camera->near_clip;
+  }
+  else
+  {
+    f32 half = tanf(deg_to_rad(camera->fov_degrees) * 0.5f);
+    direction.x = nx * aspect * half;
+    direction.y = ny * half;
+  }
+  mat4 world;
+  egn_object_get_world_matrix_internal(component->owner, &world);
+  vec3 world_origin = vec3_create(
+    world.data[0] * origin.x + world.data[4] * origin.y + world.data[8] * origin.z + world.data[12],
+    world.data[1] * origin.x + world.data[5] * origin.y + world.data[9] * origin.z + world.data[13],
+    world.data[2] * origin.x + world.data[6] * origin.y + world.data[10] * origin.z + world.data[14]);
+  quat rotation = egn_object_get_world_rotation(component->owner);
+  mat4 orientation = quat_to_mat4(rotation);
+  vec3 world_direction = vec3_create(
+    orientation.data[0] * direction.x + orientation.data[4] * direction.y + orientation.data[8] * direction.z,
+    orientation.data[1] * direction.x + orientation.data[5] * direction.y + orientation.data[9] * direction.z,
+    orientation.data[2] * direction.x + orientation.data[6] * direction.y + orientation.data[10] * direction.z);
+  return egn_physics_ray_cast(world_origin.x, world_origin.y, world_origin.z,
+                              world_direction.x, world_direction.y, world_direction.z,
+                              distance, out, capacity);
 }

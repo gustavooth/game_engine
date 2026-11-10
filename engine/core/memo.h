@@ -23,6 +23,7 @@ EGNAPI b8 memo_initialize(u64 *out_memory_requirement, void *state);
 EGNAPI void memo_shutdown();
 
 EGNAPI void *memo_allocate(u64 size, MemoTag tag);
+EGNAPI void *memo_allocate_zero(u64 size, MemoTag tag);
 
 EGNAPI void memo_free(void *block);
 
@@ -39,7 +40,7 @@ EGNAPI b8 memo_write_memory_usage_str(char *str, u64 str_len);
 
 #define MEMOALLOC(size, tag) memo_allocate(size, tag)
 
-#define MEMOZALLOC(size, tag) memo_set(memo_allocate(size, tag), 0, size)
+#define MEMOZALLOC(size, tag) memo_allocate_zero(size, tag)
 
 #define MEMOFREE(block) memo_free(block)
 #define MEMOZERO(block, size) memo_set(block, 0, size)

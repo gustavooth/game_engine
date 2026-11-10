@@ -1,5 +1,6 @@
 #include "vkrenderer_mesh.h"
 #include "vkrenderer_buffer.h"
+#include "renderer/renderer.h"
 #include "renderer/shapes.h"
 #include "core/logger.h"
 #include "core/memo.h"
@@ -104,6 +105,22 @@ void vkrenderer_mesh_destroy(VkContext *ctx, u32 handle)
 
   destroy_mesh_data(ctx, mesh->submeshes, mesh->submesh_count, mesh->asset);
   MEMOZERO(mesh, sizeof(VkRendererMesh));
+}
+
+EGNAPI void renderer_mesh_release(u32 mesh)
+{
+  VkContext *ctx = vkrenderer_get_context();
+  if (!ctx)
+    return;
+
+  // The primitive handles are renderer-owned and live until shutdown.
+  if (mesh == 0 || mesh == ctx->cube_mesh || mesh == ctx->sphere_mesh)
+    return;
+
+  // Meshes are usually released between frames (island regeneration), so wait
+  // for in-flight command buffers before destroying the vertex/index buffers.
+  vkDeviceWaitIdle(ctx->device.handle);
+  vkrenderer_mesh_destroy(ctx, mesh);
 }
 
 static u32 create_primitive(VkContext *ctx, const MeshVertex *vertices,
@@ -244,4 +261,46 @@ EGNAPI b8 renderer_mesh_get_collision(u32 mesh_handle, const vec3 **positions,
   if (index_count)
     *index_count = mesh->asset->index_count;
   return true;
+}
+
+EGNAPI u32 renderer_mesh_create_static(const f32 *positions, const f32 *normals,
+                                      const f32 *uvs, u32 vertex_count,
+                                      const u32 *indices, u32 index_count)
+{
+  VkContext *ctx = vkrenderer_get_context();
+  if (!ctx || !positions || !normals || !uvs || vertex_count == 0 ||
+      !indices || index_count < 3)
+    return 0;
+
+  MeshVertex *vertices = MEMOALLOC(sizeof(MeshVertex) * (u64)vertex_count,
+                                   MEMO_RENDERER);
+  if (!vertices)
+    return 0;
+
+  for (u32 i = 0; i < vertex_count; i++)
+  {
+    MeshVertex *vertex = &vertices[i];
+    vertex->position = vec3_create(positions[i * 3 + 0],
+                                   positions[i * 3 + 1],
+                                   positions[i * 3 + 2]);
+    vertex->normal = vec3_create(normals[i * 3 + 0],
+                                 normals[i * 3 + 1],
+                                 normals[i * 3 + 2]);
+    vertex->uv = vec2_create(uvs[i * 2 + 0], uvs[i * 2 + 1]);
+
+    // Non-skinned default: every vertex is fully weighted to the identity bone.
+    vertex->joints[0] = 0;
+    vertex->joints[1] = 0;
+    vertex->joints[2] = 0;
+    vertex->joints[3] = 0;
+    vertex->weights[0] = 1.0f;
+    vertex->weights[1] = 0.0f;
+    vertex->weights[2] = 0.0f;
+    vertex->weights[3] = 0.0f;
+  }
+
+  u32 handle = create_primitive(ctx, vertices, vertex_count, indices, index_count);
+
+  MEMOFREE(vertices);
+  return handle;
 }

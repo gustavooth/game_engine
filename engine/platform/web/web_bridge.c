@@ -3,6 +3,8 @@
 #ifdef EGNPLATFORM_WEB
 #include "core/logger.h"
 #include "core/memo.h"
+#include "core/events.h"
+#include "core/inputs.h"
 #include "physics/physics.h"
 #include "platform/platform.h"
 #include "renderer/renderer.h"
@@ -28,6 +30,8 @@ static b8 web_initialized;
 static void *web_platform_state;
 static void *web_logger_state;
 static void *web_memo_state;
+static void *web_events_state;
+static void *web_inputs_state;
 static WebMesh web_meshes[EGN_WEB_MAX_MESHES];
 
 static void web_meshes_shutdown(void)
@@ -89,9 +93,16 @@ EMSCRIPTEN_KEEPALIVE int egn_web_init(void)
     return 0;
 
   memo_initialize(&required, 0);
-  web_memo_state = malloc(required > 0 ? required : 1);
+  web_memo_state = calloc(1, required > 0 ? required : 1);
   if (!memo_initialize(0, web_memo_state))
     return 0;
+
+  events_initialize(&required, 0);
+  web_events_state = calloc(1, required);
+  if (!web_events_state || !events_initialize(0, web_events_state)) return 0;
+  inputs_initialize(&required, 0);
+  web_inputs_state = calloc(1, required);
+  if (!web_inputs_state || !inputs_initialize(0, web_inputs_state)) return 0;
 
   if (!egn_scene_initialize())
   {
@@ -127,10 +138,16 @@ EMSCRIPTEN_KEEPALIVE void egn_web_shutdown(void)
   egn_physics_shutdown();
   egn_scene_shutdown();
   web_meshes_shutdown();
+  inputs_shutdown();
+  events_shutdown();
   memo_shutdown();
   logger_shutdown();
   platform_shutdown();
 
+  free(web_inputs_state);
+  free(web_events_state);
+  web_inputs_state = 0;
+  web_events_state = 0;
   free(web_memo_state);
   free(web_logger_state);
   free(web_platform_state);
@@ -138,6 +155,19 @@ EMSCRIPTEN_KEEPALIVE void egn_web_shutdown(void)
   web_logger_state = 0;
   web_platform_state = 0;
   web_initialized = false;
+}
+
+EMSCRIPTEN_KEEPALIVE void egn_web_input_key(int key, int down)
+{
+  if (web_initialized && key >= 0 && key < 256) inputs_process_key((keys)key, down != 0);
+}
+EMSCRIPTEN_KEEPALIVE void egn_web_input_button(int button, int down)
+{
+  if (web_initialized && button >= 0 && button < BUTTON_MAX_BUTTONS) inputs_process_button((Buttons)button, down != 0);
+}
+EMSCRIPTEN_KEEPALIVE void egn_web_input_move(int x, int y, float dx, float dy)
+{
+  if (web_initialized) { inputs_process_mouse_move((i16)x, (i16)y); inputs_process_mouse_delta(dx, dy); }
 }
 
 EMSCRIPTEN_KEEPALIVE u32 egn_web_mesh_cube(void)

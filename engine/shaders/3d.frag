@@ -47,17 +47,19 @@ void main()
     vec2 uv = projected.xy * 0.5 + 0.5;
     if (projected.z <= 1.0 && uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0)
     {
-      vec2 texel = lighting.point_count.zw;
+      vec2 texel = vec2(lighting.point_count.z);
       float bias = 0.0015;
       float sum = 0.0;
-      for (int y = -1; y <= 1; y++)
+      int radius = int(lighting.point_count.w + 0.5);
+      for (int y = -radius; y <= radius; y++)
       {
-        for (int x = -1; x <= 1; x++)
+        for (int x = -radius; x <= radius; x++)
         {
           sum += texture(shadow_map, vec3(uv + vec2(x, y) * texel, projected.z - bias));
         }
       }
-      shadow = mix(1.0, sum / 9.0, lighting.sun_colour.a);
+      float samples = float((radius * 2 + 1) * (radius * 2 + 1));
+      shadow = mix(1.0, sum / samples, lighting.sun_colour.a);
     }
   }
 

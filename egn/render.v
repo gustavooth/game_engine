@@ -90,10 +90,40 @@ pub fn (e &Engine) load_texture(path string) !Texture {
 	}
 }
 
+// TextTexture is a rasterized UTF-8 string and its dimensions in pixels.
+pub struct TextTexture {
+pub:
+    texture Texture
+    width u32
+    height u32
+}
+
+// load_text rasterizes a trusted TTF/OTF font with kerning and newlines.
+// Render the returned texture using a Sprite; release it with release_texture.
+pub fn (e &Engine) load_text(font_path string, text EgnString, pixel_height f32) !TextTexture {
+    mut utf8 := C.EgnString{}
+    C.egn_string_init(&utf8)
+    if !C.egn_string_from_utf8(&utf8, text.value.str, u64(text.value.len)) { return error('failed to copy EgnString') }
+    defer { C.egn_string_destroy(&utf8) }
+    mut width := u32(0)
+    mut height := u32(0)
+    id := C.renderer_text_texture_load(font_path.str, &utf8, pixel_height, &width, &height)
+    if id == 0 { return error('failed to rasterize text or load font') }
+    return TextTexture{texture: Texture{id: id}, width: width, height: height}
+}
+
 // release_texture frees a texture loaded with load_texture.
 pub fn (e &Engine) release_texture(texture Texture) {
 	if texture.id != 0 {
 		C.renderer_texture_release(texture.id)
+	}
+}
+
+// release_mesh frees a mesh loaded with load_obj/load_glb. Renderer-owned
+// primitives (mesh_cube/mesh_sphere) are ignored by the engine.
+pub fn (e &Engine) release_mesh(mesh Mesh) {
+	if mesh.id != 0 {
+		C.renderer_mesh_release(mesh.id)
 	}
 }
 
@@ -108,6 +138,30 @@ pub fn (e &Engine) mesh_cube() Mesh {
 pub fn (e &Engine) mesh_sphere() Mesh {
 	return Mesh{
 		id: C.renderer_mesh_sphere()
+	}
+}
+
+// create_mesh uploads a static triangle mesh. positions and normals contain
+// three floats per vertex, uvs two, and indices three per triangle. The mesh
+// is owned by the renderer; release it with release_mesh.
+pub fn (e &Engine) create_mesh(positions []f32, normals []f32, uvs []f32, indices []u32) !Mesh {
+	if positions.len == 0 || indices.len == 0 {
+		return error('create_mesh: empty mesh')
+	}
+	if positions.len % 3 != 0 || normals.len != positions.len || uvs.len * 3 != positions.len * 2 {
+		return error('create_mesh: mismatched vertex attributes')
+	}
+	if indices.len % 3 != 0 {
+		return error('create_mesh: index count must be a multiple of 3')
+	}
+	vertex_count := u32(positions.len / 3)
+	id := C.renderer_mesh_create_static(positions.data, normals.data, uvs.data,
+		vertex_count, indices.data, u32(indices.len))
+	if id == 0 {
+		return error('create_mesh: renderer rejected the mesh')
+	}
+	return Mesh{
+		id: id
 	}
 }
 

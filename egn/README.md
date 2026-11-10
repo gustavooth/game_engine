@@ -353,3 +353,56 @@ for app.should_run() {
 Mensagens TCP têm tamanho prefixado automaticamente; UDP preserva datagramas.
 `Host` combina um servidor e um cliente conectado a `127.0.0.1` no mesmo
 processo, útil para testes e modos single-player com servidor local.
+
+### Cena e consultas de física
+
+A cena começa apenas com a raiz; crie explicitamente câmeras e luzes. Após
+uma atualização da física, `engine.ray_cast(origem, direcao, distancia)`,
+`engine.overlap_sphere(centro, raio)` e `engine.overlap_box(centro, tamanho)`
+retornam resultados com `object_id`. Raios são ordenados do mais próximo ao
+mais distante. Resolva um ID com `engine.object_by_id(id)`; objetos destruídos
+não são encontrados. Consultas de caixa são alinhadas aos eixos do mundo.
+
+O colisor `.capsule` usa `radius` e `size.y` como altura total em unidades
+locais. Sua forma é tridimensional, inclusive quando o corpo está restrito ao
+plano 2D.
+
+### Renderização 2D, canvas e texto
+
+`Camera` (também chamada `Camera3D`), `Camera2D` e `Canvas` são
+componentes distintos. Cada câmera usa sua máscara numérica de camadas, dentro
+de seu próprio domínio de renderização. Um objeto nasce no domínio `.world_3d`;
+use `set_render_domain(.world_2d)` ou `set_render_domain(.canvas)` para
+sprites 2D ou de interface. A câmera 2D usa o plano XY com Y para cima; o canvas
+usa pixels, também com Y para cima. `set_canvas_anchor` escolhe centro, borda
+ou canto da viewport; a posição do objeto é um deslocamento a partir da âncora.
+
+```v
+ui_camera := scene.create_object('UI camera')
+ui_camera.add_component(egn.Canvas{})
+label := scene.create_object('Label')
+label.set_render_domain(.canvas)
+label.set_canvas_anchor(.top_left)
+label.set_position(egn.vec3(100, -30, 0))
+message := egn.new_egn_string('Olá mundo')!
+text := app.load_text('assets/font.ttf', message, 24)!
+label.add_component(egn.Sprite{
+    texture: text.texture
+    size: egn.vec2(f32(text.width), f32(text.height))
+})
+// Ao liberar a cena/texto: app.release_texture(text.texture)
+```
+
+`load_text` recebe um `EgnString` criado com `new_egn_string` e rasteriza fontes TTF/OTF confiáveis, com UTF-8, quebras de linha
+e kerning, em uma textura branca com alfa. Ela pode ser usada em um sprite de
+qualquer domínio, inclusive 3D. A textura precisa ser recriada quando o texto
+muda. Não há composição complexa de escrita nem substituição automática de
+fontes. O parser stb_truetype não é seguro para fontes de origem não confiável.
+
+`CharacterController3D` e `CharacterController2D` usam cápsulas virtuais Jolt;
+o 2D mantém o personagem no plano XY, mas ainda consulta o mundo Jolt 3D.
+Use `set_velocity` para movimento horizontal, `jump` e `grounded`. As consultas
+`overlap_circle_2d` e `overlap_box_2d` verificam uma fatia de 0,002 unidades no
+plano Z informado. `mouse_ray_cast` usa o cursor ou o centro da janela quando o
+mouse está capturado. A demo usa clique esquerdo para pegar/soltar um corpo
+dinâmico e botão direito para arremessar.

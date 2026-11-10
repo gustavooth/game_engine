@@ -51,6 +51,7 @@ void events_shutdown()
 
 void events_register(u16 code, void *listener, PFN_on_event on_event)
 {
+  if (!state_ptr || code >= MAX_EVENT_CODE || !on_event) return;
   if (state_ptr->events[code].listeners == 0)
   {
     state_ptr->events[code].listeners = EGNARRAY(RegisteredListener);
@@ -62,6 +63,7 @@ void events_register(u16 code, void *listener, PFN_on_event on_event)
 
 b8 events_unregister(u16 code, PFN_on_event on_event)
 {
+  if (!state_ptr || code >= MAX_EVENT_CODE || !state_ptr->events[code].listeners) return false;
   for (u16 i = 0; i < egnarray_len(state_ptr->events[code].listeners); i++)
   {
     if (state_ptr->events[code].listeners[i].callback == on_event)
@@ -75,7 +77,7 @@ b8 events_unregister(u16 code, PFN_on_event on_event)
 
 b8 events_fire(u16 code, void *sender, EventContext data)
 {
-  if (state_ptr->events[code].listeners == 0)
+  if (!state_ptr || code >= MAX_EVENT_CODE || state_ptr->events[code].listeners == 0)
     return false;
 
   for (u16 i = 0; i < egnarray_len(state_ptr->events[code].listeners); i++)

@@ -171,18 +171,24 @@ GAME_ASSETS_SRC := $(shell find $(GAME_DIR)/assets -type f 2>/dev/null)
 GAME_ASSETS := $(patsubst $(GAME_DIR)/assets/%,$(OUTPUT_LINUX)/assets/%,$(GAME_ASSETS_SRC))
 
 # Web build: the C core (scene, components, physics and math) is compiled to
-# wasm. The browser-native JS SDK/WebGPU renderer is copied next to it; no
-# Node/npm/bundler is required. Physics uses the same Jolt sources rebuilt for
-# wasm; math is the same single implementation used natively.
+# wasm, including the same V game used on Linux. WebGPU is an internal
+# renderer backend; no separate game or JavaScript SDK is built.
 WEB_C_SRC := \
 	$(ENGINE_DIR)/platform/web/platform_web.c \
 	$(ENGINE_DIR)/platform/web/web_bridge.c \
+	$(ENGINE_DIR)/platform/web/engine_web.c \
+	$(ENGINE_DIR)/platform/linux/filemanager_linux.c \
 	$(ENGINE_DIR)/platform/web/web_math.c \
 	$(ENGINE_DIR)/core/memo.c \
 	$(ENGINE_DIR)/core/logger.c \
+	$(ENGINE_DIR)/core/events.c \
+	$(ENGINE_DIR)/core/inputs.c \
 	$(ENGINE_DIR)/core/egnstring.c \
 	$(ENGINE_DIR)/containers/egnarray.c \
+	$(ENGINE_DIR)/containers/egnstring.c \
+	$(ENGINE_DIR)/text/font.c \
 	$(ENGINE_DIR)/math/math.c \
+	$(ENGINE_DIR)/math/noise.c \
 	$(ENGINE_DIR)/scene/scene.c \
 	$(ENGINE_DIR)/scene/component.c \
 	$(ENGINE_DIR)/physics/physics.c
@@ -198,7 +204,7 @@ V_PATH := $(abspath $(GAME_DIR)/..)|@vlib|@vmodules
 # Targets
 # -----------------------------------------------------------------------------
 
-.PHONY: all build engine game run clean v jolt emsdk jolt-web web run-web clean-web naga help
+.PHONY: all build engine game run clean v jolt emsdk jolt-web web run-web clean-web naga help test
 
 all: engine game
 
@@ -207,6 +213,23 @@ build: all
 engine: $(ENGINE_LIB) $(SPIRV)
 
 game: $(GAME_BIN)
+
+TEST_FONT ?= /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+test: engine
+	@$(MKDIR) $(BUILD_DIR)/tests
+	@for source in tests/egnstring_test.c tests/physics_query_test.c tests/character_controller_test.c tests/material_test.c tests/graphics_settings_test.c tests/font_test.c tests/noise_test.c; do \
+		name=$$(basename $$source .c); \
+		$(CC) -g -I$(ENGINE_DIR) $$source -L$(OUTPUT_LINUX) -Wl,-rpath,$(abspath $(OUTPUT_LINUX)) -lengine -o $(BUILD_DIR)/tests/$$name || exit $$?; \
+	done
+	@$(BUILD_DIR)/tests/egnstring_test
+	@$(BUILD_DIR)/tests/physics_query_test
+	@$(BUILD_DIR)/tests/character_controller_test
+	@$(BUILD_DIR)/tests/material_test
+	@$(BUILD_DIR)/tests/graphics_settings_test
+	@$(BUILD_DIR)/tests/noise_test
+	@if command -v node >/dev/null 2>&1; then node tests/glb_animation_test.mjs; else echo "Skipping Web GLB test: Node.js not installed"; fi
+	@if [ -f "$(TEST_FONT)" ]; then $(BUILD_DIR)/tests/font_test "$(TEST_FONT)"; else echo "Skipping font test: set TEST_FONT to a TTF/OTF file"; fi
+
 
 # -----------------------------------------------------------------------------
 # Web / WASM + WebGPU
@@ -217,20 +240,31 @@ $(WEB_BUILD_DIR)/%.o: $(ENGINE_DIR)/%.c | $(JOLT_WEB_STAMP)
 	@$(MKDIR) $(dir $@)
 	@$(EMCC) $(WEB_CFLAGS) -c $< -o $@
 
-$(WEB_EXPORTS): $(ENGINE_DIR)/scene/scene.h $(ENGINE_DIR)/platform/web/web_bridge.c $(ENGINE_DIR)/platform/web/web_math.c
+$(WEB_EXPORTS): $(ENGINE_DIR)/scene/scene.h $(ENGINE_DIR)/containers/egnstring.h $(ENGINE_DIR)/text/font.h $(ENGINE_DIR)/platform/web/web_bridge.c $(ENGINE_DIR)/platform/web/web_math.c
 	@echo "  WASM-EXPORTS $@"
 	@$(MKDIR) $(dir $@)
-	@(grep -hoE 'egn_[a-zA-Z0-9_]+' $^ | sort -u | sed 's/^/_/' ; echo _malloc; echo _free) > $@
+	@(grep -hoE 'egn_[a-zA-Z0-9_]+' $^ | sort -u | sed 's/^/_/' ; echo _malloc; echo _free; echo _main) > $@
 
-$(WEB_ENGINE_JS): $(WEB_OBJ) $(JOLT_WEB_LIBS) $(WEB_EXPORTS)
+$(WEB_BUILD_DIR)/game.c: $(GAME_V_SRC) $(SDK_V_SRC) $(GAME_MANIFEST) $(SDK_MANIFEST)
+	@echo "  V-WASM-C $@"
+	@$(MKDIR) $(dir $@)
+	@$(V) -os wasm32_emscripten -gc none -d no_segfault_handler -path '$(V_PATH)' -o $@ $(GAME_DIR)
+	@# V's generated POSIX preamble includes ptrace, which Emscripten does not provide.
+	@sed -i 's/#if !defined(__sun)/#if !defined(__sun) \&\& !defined(__EMSCRIPTEN__)/' $@
+
+$(WEB_BUILD_DIR)/game.o: $(WEB_BUILD_DIR)/game.c
+	@echo "  WASM-CC $<"
+	@$(EMCC) $(WEB_CFLAGS) -Wno-pointer-sign -Wno-invalid-noreturn -Wno-unused-value -Wno-tautological-constant-out-of-range-compare -Wno-incompatible-pointer-types-discards-qualifiers -c $< -o $@
+
+$(WEB_ENGINE_JS): $(WEB_OBJ) $(WEB_BUILD_DIR)/game.o $(JOLT_WEB_LIBS) $(WEB_EXPORTS) $(GAME_ASSETS_SRC)
 	@echo "  WASM-LD $@"
 	@$(MKDIR) $(dir $@)
-	@$(EMXX) $(WEB_OBJ) $(JOLT_WEB_LIBS) -o $@ \
+	@$(EMXX) $(WEB_OBJ) $(WEB_BUILD_DIR)/game.o $(JOLT_WEB_LIBS) -o $@ \
 		-sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createEgnModule \
-		-sENVIRONMENT=web -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB \
-		-sSTACK_SIZE=2MB -sFILESYSTEM=0 \
+		-sENVIRONMENT=web -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sASYNCIFY=1 \
+		-sSTACK_SIZE=4MB --preload-file $(GAME_DIR)/assets@/assets \
 		-sEXPORTED_FUNCTIONS=@$(WEB_EXPORTS) \
-		-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPF32,HEAPU32
+		-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPF32,HEAPU32,callMain
 
 $(WEB_BUILD_DIR)/shaders/%.wgsl: $(ENGINE_DIR)/renderer/webgpu/shaders/%.wgsl | naga
 	@echo "  NAGA $<"
@@ -238,12 +272,12 @@ $(WEB_BUILD_DIR)/shaders/%.wgsl: $(ENGINE_DIR)/renderer/webgpu/shaders/%.wgsl | 
 	@$(NAGA) $< $@
 
 web: $(WEB_ENGINE_JS) $(WEB_SHADER_OUT)
-	@echo "  WEB  copying JavaScript SDK and demo"
+	@echo "  WEB  copying renderer and canvas host"
 	@rm -rf $(WEB_DIST)/web $(WEB_DIST)/engine $(WEB_DIST)/assets
-	@$(MKDIR) $(WEB_DIST)/web $(WEB_DIST)/engine/renderer $(WEB_DIST)/assets
-	@$(COPY) -r $(WEB_DIR)/sdk $(WEB_DIST)/web/sdk
-	@$(COPY) -r $(WEB_DIR)/demo $(WEB_DIST)/web/demo
+	@$(MKDIR) $(WEB_DIST)/engine/renderer $(WEB_DIST)/assets
 	@$(COPY) -r $(ENGINE_DIR)/renderer/webgpu $(WEB_DIST)/engine/renderer/webgpu
+	@$(MKDIR) $(WEB_DIST)/engine/platform/web
+	@$(COPY) $(ENGINE_DIR)/platform/web/host.js $(WEB_DIST)/engine/platform/web/host.js
 	@$(COPY) $(WEB_SHADER_OUT) $(WEB_DIST)/engine/renderer/webgpu/shaders/
 	@$(COPY) $(WEB_DIR)/demo/index.html $(WEB_DIST)/index.html
 	@$(COPY) -r $(GAME_DIR)/assets/. $(WEB_DIST)/assets/

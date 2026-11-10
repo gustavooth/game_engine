@@ -17,8 +17,9 @@ enum
   EGNARRAY_LENGTH,
   EGNARRAY_STRIDE,
 
+  EGNARRAY_PADDING,
   EGNARRAY_DATA,
-  EGNARRAY_FIELD_LENGTH = 3,
+  EGNARRAY_FIELD_LENGTH = 4,
 };
 
 EGNAPI egnarray _egnarray_create(u32 capacity, u32 stride);

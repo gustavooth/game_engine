@@ -208,6 +208,8 @@ static const struct wl_keyboard_listener keyboard_listener = {
 // Pointer and pointer lock
 // ---------------------------------------------------------------------------
 
+static const struct zwp_locked_pointer_v1_listener locked_pointer_listener;
+
 static void pointer_enter(void *data, struct wl_pointer *pointer, u32 serial,
                           struct wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy)
 {
@@ -222,7 +224,11 @@ static void pointer_enter(void *data, struct wl_pointer *pointer, u32 serial,
     state->locked_pointer = zwp_pointer_constraints_v1_lock_pointer(
         state->pointer_constraints, state->surface, state->pointer, NULL,
         ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+    if (state->locked_pointer)
+      zwp_locked_pointer_v1_add_listener(state->locked_pointer, &locked_pointer_listener, state);
   }
+  if (state->pointer_lock_requested)
+    wl_pointer_set_cursor(pointer, serial, NULL, 0, 0);
 
   inputs_process_mouse_move((i16)wl_fixed_to_int(sx), (i16)wl_fixed_to_int(sy));
 }

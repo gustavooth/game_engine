@@ -17,7 +17,7 @@ typedef struct VkRendererLighting
   vec4 sun_direction; // xyz = direction toward the sun, w = intensity
   vec4 sun_color;     // rgb = colour, w = shadow strength
   mat4 sun_view_projection;
-  vec4 point_count; // x = count, y = shadow enabled, z/w = shadow texel size
+  vec4 point_count; // x = count, y = shadow enabled, z = texel size, w = quality
   VkRendererPointLight point_lights[VKRENDERER_MAX_POINT_LIGHTS];
 } VkRendererLighting;
 

@@ -1153,3 +1153,6 @@ EGNINLINE f32 rad_to_deg(f32 radians)
 {
   return radians * EGN_RAD2DEG_MULTIPLIER;
 }
+
+// Seeded procedural noise (Perlin, fBm and ridged multifractal).
+#include "noise.h"

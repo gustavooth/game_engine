@@ -26,6 +26,28 @@
 #include <string.h>
 
 static VkContext ctx;
+static RendererGraphicsSettings graphics_settings = {true, RENDERER_QUALITY_MEDIUM};
+
+RendererGraphicsSettings renderer_graphics_settings_default(void)
+{
+  RendererGraphicsSettings settings = {true, RENDERER_QUALITY_MEDIUM};
+  return settings;
+}
+
+b8 renderer_set_graphics_settings(const RendererGraphicsSettings *settings)
+{
+  if (!settings || settings->shadow_quality < RENDERER_QUALITY_LOW ||
+      settings->shadow_quality > RENDERER_QUALITY_HIGH)
+    return false;
+  graphics_settings = *settings;
+  graphics_settings.shadows_enabled = !!settings->shadows_enabled;
+  return true;
+}
+
+RendererGraphicsSettings renderer_get_graphics_settings(void)
+{
+  return graphics_settings;
+}
 
 VkContext *vkrenderer_get_context(void)
 {

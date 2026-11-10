@@ -10,8 +10,10 @@ module egn
 #include "core/logger.h"
 #include "core/events.h"
 #include "core/inputs.h"
+#include "math/noise.h"
 #include "renderer/renderer.h"
 #include "scene/scene.h"
+#include "containers/egnstring.h"
 #include "network/network.h"
 
 // The SDK lives in <repo>/egn, the engine headers in <repo>/engine and the
@@ -55,6 +57,15 @@ fn C.engine_get_target_fps(instance_ptr voidptr) i32
 fn C.engine_set_pointer_lock(instance_ptr voidptr, locked bool)
 fn C.engine_is_pointer_locked(instance_ptr voidptr) bool
 
+@[typedef]
+struct C.RendererGraphicsSettings {
+mut:
+	shadows_enabled bool
+	shadow_quality  int
+}
+fn C.renderer_set_graphics_settings(settings &C.RendererGraphicsSettings) bool
+fn C.renderer_get_graphics_settings() C.RendererGraphicsSettings
+
 // ---------------------------------------------------------------------------
 // Logging
 // ---------------------------------------------------------------------------
@@ -94,21 +105,49 @@ fn C.events_fire2(code u16, sender voidptr, data0 u64, data1 u64) bool
 // ---------------------------------------------------------------------------
 
 fn C.renderer_texture_load(path &char) u32
+fn C.renderer_text_texture_load(path &char, text &C.EgnString, pixel_height f32, width &u32, height &u32) u32
 fn C.renderer_texture_release(texture u32)
 fn C.renderer_mesh_cube() u32
 fn C.renderer_mesh_sphere() u32
+fn C.renderer_mesh_create_static(positions &f32, normals &f32, uvs &f32, vertex_count u32, indices &u32, index_count u32) u32
 fn C.renderer_mesh_load_obj(path &char) u32
 fn C.renderer_mesh_load_glb(path &char) u32
+fn C.renderer_mesh_release(mesh u32)
 fn C.renderer_mesh_animation_count(mesh u32) u32
 fn C.renderer_mesh_animation_name(mesh u32, index u32) &char
 fn C.renderer_mesh_animation_duration(mesh u32, index u32) f32
 fn C.renderer_screenshot(path &char) bool
+
+@[typedef]
+struct C.EgnString {
+mut:
+    data &char
+    length u64
+    capacity u64
+}
+fn C.egn_string_init(s &C.EgnString)
+fn C.egn_string_from_utf8(s &C.EgnString, bytes &char, length u64) bool
+fn C.egn_string_destroy(s &C.EgnString)
+fn C.egn_string_utf8_valid(bytes &char, length u64) bool
 
 // ---------------------------------------------------------------------------
 // Scene / objects
 // ---------------------------------------------------------------------------
 
 fn C.egn_scene_root() voidptr
+fn C.egn_scene_find_object_by_id(id u32) voidptr
+
+@[typedef]
+struct C.EgnPhysicsHit {
+  object_id u32
+  distance f32
+}
+fn C.egn_camera_ray_cast(camera voidptr, x f32, y f32, width f32, height f32, distance f32, out &C.EgnPhysicsHit, capacity u32) u32
+fn C.egn_physics_ray_cast(x f32, y f32, z f32, dx f32, dy f32, dz f32, distance f32, out &C.EgnPhysicsHit, capacity u32) u32
+fn C.egn_physics_overlap_sphere(x f32, y f32, z f32, radius f32, out &C.EgnPhysicsHit, capacity u32) u32
+fn C.egn_physics_overlap_circle_2d(x f32, y f32, z f32, radius f32, out &C.EgnPhysicsHit, capacity u32) u32
+fn C.egn_physics_overlap_box_2d(x f32, y f32, z f32, width f32, height f32, out &C.EgnPhysicsHit, capacity u32) u32
+fn C.egn_physics_overlap_box(x f32, y f32, z f32, sx f32, sy f32, sz f32, out &C.EgnPhysicsHit, capacity u32) u32
 
 fn C.egn_object_is_valid(object voidptr) bool
 fn C.egn_object_get_id(object voidptr) u32
@@ -134,6 +173,10 @@ fn C.egn_object_look_at(object voidptr, target_x f32, target_y f32, target_z f32
 fn C.egn_object_set_scale(object voidptr, x f32, y f32, z f32)
 fn C.egn_object_get_scale(object voidptr, x &f32, y &f32, z &f32)
 
+fn C.egn_object_set_render_domain(object voidptr, domain i32)
+fn C.egn_object_get_render_domain(object voidptr) i32
+fn C.egn_object_set_canvas_anchor(object voidptr, anchor i32)
+fn C.egn_object_get_canvas_anchor(object voidptr) i32
 fn C.egn_object_set_layer(object voidptr, layer u32)
 fn C.egn_object_get_layer(object voidptr) u32
 
@@ -141,11 +184,20 @@ fn C.egn_object_set_active(object voidptr, active bool)
 fn C.egn_object_is_active(object voidptr) bool
 fn C.egn_object_is_active_in_hierarchy(object voidptr) bool
 
+fn C.egn_canvas_pick(screen_x f32, screen_y f32, framebuffer_width f32, framebuffer_height f32) u32
+fn C.egn_object_canvas_rect(object voidptr, framebuffer_width f32, framebuffer_height f32, out_x &f32, out_y &f32, out_width &f32, out_height &f32) bool
+
 // ---------------------------------------------------------------------------
 // Components
 // ---------------------------------------------------------------------------
 
 fn C.egn_object_add_camera(object voidptr, projection i32, fov f32, ortho_size f32, near_clip f32, far_clip f32, viewport_x f32, viewport_y f32, viewport_width f32, viewport_height f32, layer_mask u32, clear_r f32, clear_g f32, clear_b f32, clear_a f32, clear_color bool, clear_depth bool, order i32, enabled bool) voidptr
+fn C.egn_object_add_character(object voidptr, is_2d bool, radius f32, height f32, gravity f32, enabled bool) voidptr
+fn C.egn_character_set_velocity(character voidptr, x f32, z f32)
+fn C.egn_character_jump(character voidptr, speed f32)
+fn C.egn_character_is_grounded(character voidptr) bool
+fn C.egn_object_add_camera_2d(object voidptr, ortho_size f32, mask u32, order i32, enabled bool) voidptr
+fn C.egn_object_add_canvas(object voidptr, mask u32, order i32, enabled bool) voidptr
 fn C.egn_object_add_model(object voidptr, mesh u32, texture u32, r f32, g f32, b f32, a f32, cast_shadows bool, enabled bool) voidptr
 fn C.egn_object_add_sprite(object voidptr, texture u32, width f32, height f32, pivot_x f32, pivot_y f32, r f32, g f32, b f32, a f32, enabled bool) voidptr
 fn C.egn_object_add_animation(object voidptr, clip i32, speed f32, loop bool, playing bool, enabled bool) voidptr
@@ -191,6 +243,8 @@ fn C.egn_camera_set_order(camera voidptr, order i32)
 // Model component ---------------------------------------------------------
 
 fn C.egn_model_get_mesh(model voidptr) u32
+fn C.egn_model_set_pbr(model voidptr, metallic f32, roughness f32) bool
+fn C.egn_model_get_pbr(model voidptr, metallic &f32, roughness &f32)
 fn C.egn_model_set_mesh(model voidptr, mesh u32)
 fn C.egn_model_get_texture(model voidptr) u32
 fn C.egn_model_set_texture(model voidptr, texture u32)

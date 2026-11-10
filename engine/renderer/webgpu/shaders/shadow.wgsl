@@ -6,6 +6,7 @@ struct ObjectUniforms {
   model: mat4x4f,
   color: vec4f,
   params: vec4f,
+  inverseModel: mat4x4f,
 };
 
 @group(0) @binding(0) var<uniform> globals: ShadowGlobals;

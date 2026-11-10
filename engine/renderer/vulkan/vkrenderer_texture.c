@@ -1,4 +1,5 @@
 #include "vkrenderer_texture.h"
+#include "text/font.h"
 #include "vkrenderer_buffer.h"
 #include "vkrenderer_command_buffer.h"
 #include "vkrenderer_descriptor.h"
@@ -361,4 +362,19 @@ void renderer_texture_release(u32 texture)
   // for in-flight frames before destroying the underlying Vulkan objects.
   vkDeviceWaitIdle(ctx->device.handle);
   vkrenderer_texture_destroy(ctx, slot);
+}
+
+u32 renderer_text_texture_load(const char *font_path, const EgnString *text, f32 pixel_height, u32 *width, u32 *height)
+{
+  if (!font_path || !text || !width || !height) return 0;
+  VkContext *ctx = vkrenderer_get_context();
+  if (!ctx || !ctx->device.handle) return 0;
+  u8 *font = 0; u64 size = 0;
+  if (!filemanager_read_all(font_path, &font, &size)) return 0;
+  u8 *pixels = size <= 0xffffffffu ? egn_font_rasterize(font, (u32)size, text, pixel_height, width, height) : 0;
+  MEMOFREE(font);
+  if (!pixels) return 0;
+  u32 texture = texture_register_rgba(ctx, pixels, *width, *height, 0);
+  egn_font_pixels_free(pixels);
+  return texture;
 }

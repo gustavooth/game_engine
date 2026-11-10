@@ -1,4 +1,5 @@
 #include "vkrenderer_scene.h"
+#include "renderer/renderer.h"
 #include "vkrenderer_skin.h"
 #include "vkrenderer_lighting.h"
 #include "vkrenderer_particles.h"
@@ -26,6 +27,8 @@ typedef struct SceneCameraInfo
 {
   EgnObject *object;
   EgnCameraData *camera;
+  i32 domain;
+  u32 width, height;
   i32 order;
   u32 sequence;
 } SceneCameraInfo;
@@ -521,9 +524,10 @@ static void collect_lights_recursive(EgnObject *object, VkRendererLighting *ligh
       if (egnabs(vec3_dot(shine, up)) > 0.99f)
         up = vec3_back();
 
-      vec3 light_position = vec3_sub(center, vec3_mul_scalar(shine, 45.0f));
+      vec3 light_position = vec3_sub(center, vec3_mul_scalar(shine, 350.0f));
       mat4 view = mat4_look_at(light_position, center, up);
-      mat4 projection = mat4_orthographic(-25.0f, 25.0f, -25.0f, 25.0f, 0.1f, 100.0f);
+      // Wide enough to cover the large block island (about 288 units across).
+      mat4 projection = mat4_orthographic(-200.0f, 200.0f, -200.0f, 200.0f, 0.1f, 800.0f);
       lighting->sun_view_projection = mat4_mul(projection, view);
       lighting->point_count.y = light->cast_shadows ? 1.0f : 0.0f;
       *has_sun = true;
@@ -611,7 +615,7 @@ static void render_particles_recursive(VkContext *ctx, VkRendererCommandBuffer *
   if (!object || !object->alive || !object->active)
     return;
 
-  b8 layer_visible = object->layer < EGN_SCENE_MAX_LAYERS &&
+  b8 layer_visible = object->render_domain == camera->domain && object->layer < EGN_SCENE_MAX_LAYERS &&
                      (camera->camera->layer_mask & (1u << object->layer)) != 0;
 
   if (layer_visible)
@@ -677,6 +681,11 @@ b8 vkrenderer_scene_prepare(VkContext *ctx, VkRendererCommandBuffer *command_buf
   if (scene && scene->root)
     collect_lights_recursive(scene->root, &lighting, &has_sun);
 
+  RendererGraphicsSettings graphics = renderer_get_graphics_settings();
+  if (!graphics.shadows_enabled)
+    lighting.point_count.y = 0.0f;
+  lighting.point_count.w = (f32)graphics.shadow_quality;
+
   vkrenderer_lighting_write(ctx, &lighting);
   vkrenderer_skin_barrier(ctx, command_buffer);
 
@@ -704,7 +713,7 @@ static void render_shadows_recursive(VkContext *ctx, VkRendererCommandBuffer *co
       continue;
 
     EgnModelData *model = &component->data.model;
-    if (!model->cast_shadows || model->mesh == 0 || model->mesh > VKRENDERER_MAX_MESHES)
+    if (object->render_domain != EGN_RENDER_3D || !model->cast_shadows || model->mesh == 0 || model->mesh > VKRENDERER_MAX_MESHES)
       continue;
 
     VkRendererMesh *mesh = &ctx->meshes[model->mesh - 1];
@@ -846,7 +855,9 @@ static void collect_cameras(EgnObject *object, SceneCameraInfo *cameras,
   for (EgnComponent *component = object->first_component; component; component = component->next)
   {
     if (!component->alive || !component->enabled ||
-        component->type != EGN_COMPONENT_TYPE_CAMERA)
+        (component->type != EGN_COMPONENT_TYPE_CAMERA &&
+         component->type != EGN_COMPONENT_TYPE_CAMERA_2D &&
+         component->type != EGN_COMPONENT_TYPE_CANVAS))
       continue;
 
     if (*camera_count < VKRENDERER_MAX_CAMERAS)
@@ -854,6 +865,8 @@ static void collect_cameras(EgnObject *object, SceneCameraInfo *cameras,
       SceneCameraInfo *info = &cameras[*camera_count];
       info->object = object;
       info->camera = &component->data.camera;
+      info->domain = component->type == EGN_COMPONENT_TYPE_CANVAS ? EGN_RENDER_CANVAS :
+                     component->type == EGN_COMPONENT_TYPE_CAMERA_2D ? EGN_RENDER_2D : EGN_RENDER_3D;
       info->order = component->data.camera.order;
       info->sequence = (*sequence)++;
       (*camera_count)++;
@@ -999,7 +1012,7 @@ static void render_models(VkContext *ctx, VkRendererCommandBuffer *command_buffe
   if (!object || !object->alive || !object->active)
     return;
 
-  b8 layer_visible = object->layer < EGN_SCENE_MAX_LAYERS &&
+  b8 layer_visible = object->render_domain == camera->domain && object->layer < EGN_SCENE_MAX_LAYERS &&
                      (camera->camera->layer_mask & (1u << object->layer)) != 0;
 
   if (layer_visible)
@@ -1037,7 +1050,7 @@ static void render_sprites(VkContext *ctx, VkRendererCommandBuffer *command_buff
   if (!object || !object->alive || !object->active)
     return;
 
-  b8 layer_visible = object->layer < EGN_SCENE_MAX_LAYERS &&
+  b8 layer_visible = object->render_domain == camera->domain && object->layer < EGN_SCENE_MAX_LAYERS &&
                      (camera->camera->layer_mask & (1u << object->layer)) != 0;
 
   if (layer_visible)
@@ -1068,6 +1081,12 @@ static void render_sprites(VkContext *ctx, VkRendererCommandBuffer *command_buff
           mat4_translation(vec3_create(offset_x, offset_y, 0.0f)),
           mat4_scale(vec3_create(sprite->width, sprite->height, 1.0f)));
       mat4 model = mat4_mul(world, local);
+      if (camera->domain == EGN_RENDER_CANVAS)
+      {
+        f32 ax = ((object->canvas_anchor % 3) - 1) * (f32)camera->width * 0.5f;
+        f32 ay = ((object->canvas_anchor / 3) - 1) * (f32)camera->height * 0.5f;
+        model = mat4_mul(mat4_translation(vec3_create(ax, ay, 0)), model);
+      }
 
       vec4 tint = vec4_create(sprite->r, sprite->g, sprite->b, sprite->a);
       draw_mesh(ctx, command_buffer, &ctx->shader_sprite, ctx->sprite_mesh,
@@ -1127,18 +1146,20 @@ void vkrenderer_scene_render(VkContext *ctx, VkRendererCommandBuffer *command_bu
 
     clear_camera_area(command_buffer, camera->camera, x, y, width, height);
 
-    mat4 view = camera_view_matrix(camera->object);
+    camera->width = width;
+    camera->height = height;
+    mat4 view = camera->domain == EGN_RENDER_CANVAS ? mat4_identity() : camera_view_matrix(camera->object);
     f32 aspect = (f32)width / (f32)height;
 
     mat4 projection;
-    if (camera->camera->projection == EGN_PROJECTION_ORTHOGRAPHIC)
+    if (camera->domain != EGN_RENDER_3D || camera->camera->projection == EGN_PROJECTION_ORTHOGRAPHIC)
     {
-      f32 half_height = camera->camera->ortho_size * 0.5f;
+      f32 half_height = camera->domain == EGN_RENDER_CANVAS ? height * 0.5f : camera->camera->ortho_size * 0.5f;
       f32 half_width = half_height * aspect;
       projection = mat4_orthographic(-half_width, half_width,
                                      -half_height, half_height,
-                                     camera->camera->near_clip,
-                                     camera->camera->far_clip);
+                                     camera->domain == EGN_RENDER_3D ? camera->camera->near_clip : -1000.0f,
+                                     camera->domain == EGN_RENDER_3D ? camera->camera->far_clip : 1000.0f);
     }
     else
     {
@@ -1161,8 +1182,10 @@ void vkrenderer_scene_render(VkContext *ctx, VkRendererCommandBuffer *command_bu
                             ctx->shader_3d.pipeline.layout, 2, 1, &lighting_set, 0, 0);
 
     VkDescriptorSet last_texture = 0;
-    render_models(ctx, command_buffer, scene->root, camera, view_projection, &last_texture);
-    render_particles_recursive(ctx, command_buffer, scene->root, camera, view, view_projection);
+    if (camera->domain == EGN_RENDER_3D) {
+      render_models(ctx, command_buffer, scene->root, camera, view_projection, &last_texture);
+      render_particles_recursive(ctx, command_buffer, scene->root, camera, view, view_projection);
+    }
 
     vkrenderer_shader_bind(ctx, &ctx->shader_sprite, command_buffer->handle);
     last_texture = 0;

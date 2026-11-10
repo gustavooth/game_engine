@@ -176,13 +176,13 @@ i16 inputs_prev_mouse_wheel()
   return state_ptr->previous_mouse.wheel;
 }
 
-void inputs_get_mouse_position(i32 *x, i32 *y)
+void inputs_get_mouse_pos(i32 *x, i32 *y)
 {
   *x = state_ptr->current_mouse.x;
   *y = state_ptr->current_mouse.y;
 }
 
-void inputs_get_previous_mouse_position(i32 *x, i32 *y)
+void inputs_get_prev_mouse_pos(i32 *x, i32 *y)
 {
   *x = state_ptr->previous_mouse.x;
   *y = state_ptr->previous_mouse.y;

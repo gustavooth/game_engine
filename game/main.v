@@ -4,6 +4,8 @@ import math
 import egn {
 	Animation,
 	Camera,
+	Canvas,
+	CharacterController,
 	Collider,
 	Color,
 	Light,
@@ -17,23 +19,94 @@ import egn {
 	Settings,
 	Sprite,
 	Texture,
+	TextTexture,
 	Vec2,
 	Vec3,
 	Viewport,
 	create,
 	log_error,
 	log_info,
+	new_egn_string,
 	rgb,
 	rgba,
 	vec2,
 	vec3,
 }
 
+struct FpsGlyph {
+    object Object
+    sprite Sprite
+}
+
+struct FpsCounter {
+    glyphs []TextTexture
+    lines []FpsGlyph
+}
+
+fn create_fps_counter(app &egn.Engine, scene Object) !FpsCounter {
+    mut glyphs := []TextTexture{cap: 11}
+    for glyph_text in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' FPS'] {
+        text := new_egn_string(glyph_text)!
+        glyph := app.load_text('assets/fonts/DejaVuSansMono.ttf', text, 18) or {
+            for loaded in glyphs { app.release_texture(loaded.texture) }
+            return err
+        }
+        glyphs << glyph
+    }
+    mut lines := []FpsGlyph{cap: 10}
+    for layer in 0 .. 2 {
+        for _ in 0 .. 5 {
+            object := scene.create_object('FPS counter')
+            object.set_render_domain(.canvas)
+            object.set_canvas_anchor(.top_left)
+            sprite := object.add_component(Sprite{
+                texture: glyphs[0].texture
+                size: vec2(f32(glyphs[0].width), f32(glyphs[0].height))
+                pivot: vec2(0, 1)
+                color: if layer == 0 { rgba(0, 0, 0, 0.9) } else { rgba(1, 1, 1, 1) }
+            })
+            lines << FpsGlyph{object: object, sprite: sprite}
+        }
+    }
+    return FpsCounter{glyphs: glyphs, lines: lines}
+}
+
+fn (counter FpsCounter) show(value int) {
+    mut number := if value > 9999 { 9999 } else if value < 0 { 0 } else { value }
+    mut digits := [4]int{}
+    mut digit_count := 0
+    for {
+        digits[digit_count] = number % 10
+        digit_count++
+        number /= 10
+        if number == 0 { break }
+    }
+    for layer in 0 .. 2 {
+        mut x := f32(12 + if layer == 0 { 1 } else { 0 })
+        y := f32(-12 - if layer == 0 { 1 } else { 0 })
+        for i in 0 .. 5 {
+            item := counter.lines[layer * 5 + i]
+            if i > digit_count {
+                item.object.set_active(false)
+                continue
+            }
+            index := if i == digit_count { 10 } else { digits[digit_count - 1 - i] }
+            glyph := counter.glyphs[index]
+            item.object.set_active(true)
+            item.object.set_position(vec3(x, y, 0))
+            mut sprite := item.sprite
+            sprite.set_texture(glyph.texture)
+            sprite.set_size(vec2(f32(glyph.width), f32(glyph.height)))
+            x += f32(glyph.width)
+        }
+    }
+}
+
 // EGN feature demo.
 //
 // Controls:
 //   WASD ........ walk (W/S along the view direction, A/D strafe)
-//   Space/Ctrl .. move up/down
+//   Space ....... jump
 //   Mouse ....... look (click to capture the pointer)
 //   Esc ......... quit
 //   F1 .......... toggle vsync
@@ -48,7 +121,7 @@ fn main() {
 		height:     720
 		x:          100
 		y:          100
-		vsync:      true
+		vsync:      false
 		target_fps: 0
 	}) or {
 		eprintln('failed to start the engine: ${err}')
@@ -84,22 +157,50 @@ fn main() {
 	scene := app.scene()
 	scene.set_layer(u32(0))
 
-	// Camera: reuse the default camera and drive it like an FPS controller.
-	camera_object := scene.child_at(0) or {
-		log_error('default camera object was not found')
-		exit(1)
-	}
-	camera_object.set_name('FPS Camera')
-	camera_object.set_position(vec3(0.0, 1.5, 5.5))
+	// The demo creates its own camera and sun; the engine scene starts empty.
+	player := scene.create_object('Player')
+	player.set_position(vec3(0.0, 0.9, 5.5))
+	controller := player.add_component(CharacterController{})
+	camera_object := player.create_object('FPS Camera')
+	camera_object.set_position(vec3(0.0, 0.6, 0.0))
 	camera_object.set_layer(u32(1))
-	mut camera := camera_object.get_component[Camera]() or {
-		log_error('default camera component was not found')
-		exit(1)
+	camera := camera_object.add_component(Camera{
+		fov: 65.0
+		near: 0.05
+		far: 300.0
+		clear_color: rgba(0.035, 0.055, 0.11, 1.0)
+	})
+	sun := scene.create_object('Sun')
+	sun.set_position(vec3(0.0, 10.0, 0.0))
+	sun.set_euler_deg(vec3(-50.0, -30.0, 0.0))
+	sun.add_component(Light{
+		light_type: .directional
+		color: rgb(1.0, 0.95, 0.85)
+		intensity: 1.0
+		cast_shadows: true
+	})
+
+	// Canvas in screen pixels; the default center anchor keeps the crosshair
+	// centered even when the window is resized.
+	crosshair_canvas := scene.create_object('Crosshair Canvas')
+	crosshair_canvas.add_component(Canvas{ order: 1000 })
+	for i in 0 .. 4 {
+		line := scene.create_object('Crosshair ${i}')
+		line.set_render_domain(.canvas)
+		line.add_component(Sprite{
+			size: if i == 0 { vec2(18, 4) } else if i == 1 { vec2(4, 18) } else if i == 2 { vec2(14, 2) } else { vec2(2, 14) }
+			color: if i < 2 { rgba(0, 0, 0, 0.85) } else { rgba(1, 1, 1, 0.95) }
+		})
 	}
-	camera.set_layer_mask(u32(0xFFFFFFFF))
-	camera.set_clear_color(rgba(0.035, 0.055, 0.11, 1.0))
-	camera.set_fov(65.0)
-	camera.set_clip_planes(0.05, 300.0)
+
+	fps_counter := create_fps_counter(&app, scene) or {
+		log_error('could not create FPS counter: ${err}')
+		return
+	}
+	defer {
+		for glyph in fps_counter.glyphs { app.release_texture(glyph.texture) }
+	}
+	fps_counter.show(0)
 
 	// Ground: a wide, thin cube with a tiled-ish grid texture and a static
 	// box collider.
@@ -136,6 +237,24 @@ fn main() {
 	log_info('fox clips: 0="${fox_mesh.animation_name(0)}" (${fox_mesh.animation_duration(0):.2f}s), ' +
 		'1="${fox_mesh.animation_name(1)}" (${fox_mesh.animation_duration(1):.2f}s), ' +
 		'2="${fox_mesh.animation_name(2)}" (${fox_mesh.animation_duration(2):.2f}s)')
+
+	// A separate humanoid with a looping skeletal idle animation, useful for
+	// checking skinning alongside the fox's walking animation.
+	humanoid_mesh := app.load_glb('assets/models/humanoid_idle.glb') or {
+		log_error('could not load humanoid_idle.glb: ${err}')
+		Mesh{}
+	}
+	if humanoid_mesh.is_valid() {
+		humanoid := scene.create_object('Humanoid Idle')
+		humanoid.set_position(vec3(1.6, 0.02, 2.7))
+		humanoid.set_euler_deg(vec3(0, 0, 0))
+		humanoid.set_scale(vec3(0.32, 0.32, 0.32))
+		humanoid.set_layer(u32(1))
+		humanoid.add_component(Model{ mesh: humanoid_mesh })
+		mut idle := humanoid.add_component(Animation{ clip: 2, speed: 1, loop: true })
+		idle.play()
+		log_info('humanoid idle: "${humanoid_mesh.animation_name(2)}" (${humanoid_mesh.animation_duration(2):.2f}s)')
+	}
 
 	// Camp fire: particles + warm point light.
 	fire := scene.create_object('Camp Fire')
@@ -318,13 +437,14 @@ fn main() {
 	mut pitch := f32(-0.08)
 	sensitivity := f32(0.0022)
 	mut move_speed := f32(5.0)
-	mut camera_position := vec3(0.0, 1.5, 5.5)
 	fps_caps := [0, 60, 120, 144]
 	mut fps_cap_index := 0
+	mut held_id := u32(0)
+	mut fps_sample_start := app.elapsed_time()
+	mut fps_frame_count := 0
 	mut want_lock := true
 
 	for app.should_run() {
-		dt := f32(app.delta_time())
 
 		// Keep trying until the compositor grants the pointer lock (it needs
 		// an input serial, which usually arrives with pointer-enter).
@@ -373,49 +493,62 @@ fn main() {
 		}
 
 		mut move := vec3(0.0, 0.0, 0.0)
-		// Forward follows the full view direction (including pitch); strafing
-		// remains horizontal so the camera can fly freely in 3D.
-		cos_pitch := f32(math.cos(f64(pitch)))
-		forward := vec3(
-			-f32(math.sin(f64(yaw))) * cos_pitch,
-			f32(math.sin(f64(pitch))),
-			-f32(math.cos(f64(yaw))) * cos_pitch,
-		)
-		right := vec3(f32(math.cos(f64(yaw))), 0.0, -f32(math.sin(f64(yaw))))
-		if app.key_down(.w) {
-			move = move.add(forward)
-		}
-		if app.key_down(.s) {
-			move = move.sub(forward)
-		}
-		if app.key_down(.d) {
-			move = move.add(right)
-		}
-		if app.key_down(.a) {
-			move = move.sub(right)
-		}
-		if app.key_down(.space) {
-			move.y += 1.0
-		}
-		if app.key_down(.control) {
-			move.y -= 1.0
-		}
-		if app.key_down(.shift) {
-			move_speed = 9.0
-		} else {
-			move_speed = 5.0
-		}
-		if move.length() > 0.001 {
-			camera_position = camera_position.add(move.normalized().scale(move_speed * dt))
-		}
-		camera_object.set_position(camera_position)
+		// Ground movement follows yaw; look pitch does not affect walking.
+		forward := vec3(-f32(math.sin(f64(yaw))), 0, -f32(math.cos(f64(yaw))))
+		right := vec3(f32(math.cos(f64(yaw))), 0, -f32(math.sin(f64(yaw))))
+		if app.key_down(.w) { move = move.add(forward) }
+		if app.key_down(.s) { move = move.sub(forward) }
+		if app.key_down(.d) { move = move.add(right) }
+		if app.key_down(.a) { move = move.sub(right) }
+		if app.key_pressed(.space) { controller.jump(5.0) }
+		if app.key_down(.shift) { move_speed = 9.0 } else { move_speed = 5.0 }
+		if move.length() > 0.001 { move = move.normalized().scale(move_speed) }
+		controller.set_velocity(move.x, move.z)
 		camera_object.set_look_angles(pitch, yaw, 0.0)
+        look := vec3(-f32(math.sin(f64(yaw))) * f32(math.cos(f64(pitch))),
+            f32(math.sin(f64(pitch))), -f32(math.cos(f64(yaw))) * f32(math.cos(f64(pitch))))
+        if app.pointer_locked() && app.mouse_pressed(.left) {
+            if held_id != 0 {
+                held_id = 0
+            } else {
+                hits := app.mouse_ray_cast(camera, 4.0)
+                if hits.len > 0 {
+                    if target := app.object_by_id(hits[0].object_id) {
+                        if rb := target.get_component[Rigidbody]() {
+                            if rb.motion_type == .dynamic { held_id = target.id() }
+                        }
+                    }
+                }
+            }
+        }
+        if held_id != 0 {
+            if target := app.object_by_id(held_id) {
+                if mut rb := target.get_component[Rigidbody]() {
+                    if app.mouse_pressed(.right) {
+                        rb.apply_impulse(look.scale(8.0))
+                        held_id = 0
+                    } else {
+                        eye := player.position().add(vec3(0, 0.6, 0))
+                        delta := eye.add(look.scale(2.0)).sub(target.position())
+                        rb.set_linear_velocity(delta.scale(8.0))
+                    }
+                } else { held_id = 0 }
+            } else { held_id = 0 }
+        }
+
 
 		// Animate the camp fire's light intensity slightly.
 		fire_light_object.set_position(vec3(2.4 + f32(math.sin(f64(f32(app.elapsed_time()) * 3.0))) * 0.08, 1.1,
 			-1.6 + f32(math.cos(f64(f32(app.elapsed_time()) * 2.3))) * 0.08))
 
 		app.frame()
+		fps_frame_count++
+		elapsed := app.elapsed_time() - fps_sample_start
+		if elapsed >= 0.5 {
+			fps_counter.show(int(f64(fps_frame_count) / elapsed + 0.5))
+			fps_frame_count = 0
+			fps_sample_start = app.elapsed_time()
+		}
 	}
 
 	log_info('EGN feature demo finished')

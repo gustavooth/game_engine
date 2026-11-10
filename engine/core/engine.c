@@ -123,6 +123,7 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
   }
 
   EngineState *instance = MEMOZALLOC(sizeof(EngineState), MEMO_NOT_INITIALIZED);
+  if (!instance) { *out_instance_ptr = 0; return false; }
   *out_instance_ptr = instance;
   engine_ptr = instance;
 

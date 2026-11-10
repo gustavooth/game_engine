@@ -15,7 +15,89 @@ pub enum ComponentType {
 	rigidbody = 5
 	collider  = 6
 	particles = 7
+	camera_2d = 8
+	canvas = 9
 }
+
+pub enum RenderDomain {
+    world_3d = 0
+    world_2d = 1
+    canvas = 2
+}
+
+pub enum CanvasAnchor {
+    bottom_left = 0
+    bottom = 1
+    bottom_right = 2
+    left = 3
+    center = 4
+    right = 5
+    top_left = 6
+    top = 7
+    top_right = 8
+}
+
+pub struct Camera2D {
+mut:
+    handle voidptr
+pub mut:
+    ortho_size f32 = 10
+    layer_mask u32 = 0xffffffff
+    order int
+    enabled bool = true
+}
+
+pub struct Canvas {
+mut:
+    handle voidptr
+pub mut:
+    layer_mask u32 = 0xffffffff
+    order int
+    enabled bool = true
+}
+
+// CanvasBounds is the screen-space rectangle (pixels, top-left origin) covered
+// by the sprites of a canvas object.
+pub struct CanvasBounds {
+pub mut:
+    x      f32
+    y      f32
+    width  f32
+    height f32
+}
+
+pub struct CharacterController {
+mut:
+    handle voidptr
+pub mut:
+    is_2d bool
+    radius f32 = 0.3
+    height f32 = 1.8
+    gravity f32 = 9.81
+    enabled bool = true
+}
+
+pub type CharacterController3D = CharacterController
+
+pub struct CharacterController2D {
+mut:
+    handle voidptr
+pub mut:
+    radius f32 = 0.3
+    height f32 = 1.8
+    gravity f32 = 9.81
+    enabled bool = true
+}
+pub fn (c CharacterController2D) set_velocity(x f32) { C.egn_character_set_velocity(c.handle, x, 0) }
+pub fn (c CharacterController2D) jump(speed f32) { C.egn_character_jump(c.handle, speed) }
+pub fn (c CharacterController2D) grounded() bool { return C.egn_character_is_grounded(c.handle) }
+
+// set_velocity controls horizontal world-space movement. For 2D, z is ignored.
+pub fn (c CharacterController) set_velocity(x f32, z f32) {
+    C.egn_character_set_velocity(c.handle, x, z)
+}
+pub fn (c CharacterController) jump(speed f32) { C.egn_character_jump(c.handle, speed) }
+pub fn (c CharacterController) grounded() bool { return C.egn_character_is_grounded(c.handle) }
 
 pub enum LightType {
 	directional = 0
@@ -32,6 +114,7 @@ pub enum ColliderShape {
 	box    = 0
 	sphere = 1
 	mesh   = 2
+	capsule = 3
 }
 
 // Object is a handle to an engine object (a scene node / GameObject).
@@ -59,6 +142,9 @@ pub mut:
 	enabled             bool = true
 }
 
+// Camera3D is the explicit name for the existing 3D Camera component.
+pub type Camera3D = Camera
+
 // Model renders a 3D mesh with a solid colour/texture.
 pub struct Model {
 mut:
@@ -67,6 +153,8 @@ pub mut:
 	mesh         Mesh    = Mesh{}
 	texture      Texture = Texture{}
 	color        Color   = Color{ r: 1.0, g: 1.0, b: 1.0, a: 1.0 }
+	metallic     f32
+	roughness    f32 = 1.0
 	cast_shadows bool    = true
 	enabled      bool    = true
 }
@@ -115,7 +203,8 @@ pub mut:
 }
 
 // Collider defines the shape used by a Rigidbody (or a static collider when
-// no Rigidbody is present).
+// no Rigidbody is present). For capsules, size.y is the total height and
+// radius is the radius of each hemispherical end.
 pub struct Collider {
 mut:
 	handle voidptr
@@ -250,6 +339,26 @@ pub fn (o Object) child_at(index int) ?Object {
 	}
 }
 
+pub fn (o Object) set_render_domain(domain RenderDomain) {
+    C.egn_object_set_render_domain(o.handle, i32(domain))
+}
+pub fn (o Object) set_canvas_anchor(anchor CanvasAnchor) {
+    C.egn_object_set_canvas_anchor(o.handle, i32(anchor))
+}
+
+// canvas_bounds returns the screen-space AABB of this object's sprites. The
+// framebuffer size can be obtained from Engine.window_size().
+pub fn (o Object) canvas_bounds(framebuffer_width f32, framebuffer_height f32) ?CanvasBounds {
+    mut x := f32(0)
+    mut y := f32(0)
+    mut width := f32(0)
+    mut height := f32(0)
+    if !C.egn_object_canvas_rect(o.handle, framebuffer_width, framebuffer_height, &x, &y, &width, &height) {
+        return none
+    }
+    return CanvasBounds{x: x, y: y, width: width, height: height}
+}
+
 pub fn (o Object) set_position(position Vec3) {
 	C.egn_object_set_position(o.handle, position.x, position.y, position.z)
 }
@@ -355,12 +464,35 @@ pub fn (o Object) add_component[T](component T) T {
 		mut result := component
 		result.handle = h
 		return result
+	} $else $if T is Camera2D {
+        h := C.egn_object_add_camera_2d(o.handle, component.ortho_size, component.layer_mask, i32(component.order), component.enabled)
+        mut result := component
+        result.handle = h
+        return result
+    } $else $if T is Canvas {
+        h := C.egn_object_add_canvas(o.handle, component.layer_mask, i32(component.order), component.enabled)
+        mut result := component
+        result.handle = h
+        return result
+	} $else $if T is CharacterController2D {
+        h := C.egn_object_add_character(o.handle, true, component.radius, component.height, component.gravity, component.enabled)
+        mut result := component
+        result.handle = h
+        return result
+	} $else $if T is CharacterController {
+        h := C.egn_object_add_character(o.handle, component.is_2d, component.radius, component.height, component.gravity, component.enabled)
+        mut result := component
+        result.handle = h
+        return result
 	} $else $if T is Model {
 		h := C.egn_object_add_model(o.handle, component.mesh.id, component.texture.id,
 			component.color.r, component.color.g, component.color.b, component.color.a,
 			component.cast_shadows, component.enabled)
 		mut result := component
 		result.handle = h
+		if !C.egn_model_set_pbr(h, component.metallic, component.roughness) {
+			C.egn_model_get_pbr(h, &result.metallic, &result.roughness)
+		}
 		return result
 	} $else $if T is Sprite {
 		h := C.egn_object_add_sprite(o.handle, component.texture.id, component.size.x, component.size.y,
@@ -459,6 +591,25 @@ pub fn (o Object) get_component[T]() ?T {
 		result.order = int(C.egn_camera_get_order(h))
 		result.enabled = C.egn_component_is_enabled(h)
 		return result
+	} $else $if T is Camera2D {
+        h := C.egn_object_get_component(o.handle, i32(ComponentType.camera_2d))
+        if h == 0 { return none }
+        mut result := T{}
+        result.handle = h
+        result.ortho_size = C.egn_camera_get_ortho_size(h)
+        result.layer_mask = C.egn_camera_get_layer_mask(h)
+        result.order = int(C.egn_camera_get_order(h))
+        result.enabled = C.egn_component_is_enabled(h)
+        return result
+    } $else $if T is Canvas {
+        h := C.egn_object_get_component(o.handle, i32(ComponentType.canvas))
+        if h == 0 { return none }
+        mut result := T{}
+        result.handle = h
+        result.layer_mask = C.egn_camera_get_layer_mask(h)
+        result.order = int(C.egn_camera_get_order(h))
+        result.enabled = C.egn_component_is_enabled(h)
+        return result
 	} $else $if T is Model {
 		h := C.egn_object_get_component(o.handle, i32(ComponentType.model))
 		if h == 0 {
@@ -484,6 +635,7 @@ pub fn (o Object) get_component[T]() ?T {
 			a: ca
 		}
 		result.cast_shadows = C.egn_model_get_cast_shadows(h)
+		C.egn_model_get_pbr(h, &result.metallic, &result.roughness)
 		result.enabled = C.egn_component_is_enabled(h)
 		return result
 	} $else $if T is Sprite {
@@ -749,6 +901,17 @@ pub fn (mut m Model) set_color(color Color) {
 	m.color = color
 }
 
+// Stores both PBR factors atomically; each must be between 0 and 1.
+// WebGPU uses these factors for direct lighting; Vulkan support is pending.
+pub fn (mut m Model) set_pbr(metallic f32, roughness f32) bool {
+	if !C.egn_model_set_pbr(m.handle, metallic, roughness) {
+		return false
+	}
+	m.metallic = metallic
+	m.roughness = roughness
+	return true
+}
+
 pub fn (mut m Model) set_cast_shadows(cast_shadows bool) {
 	C.egn_model_set_cast_shadows(m.handle, cast_shadows)
 	m.cast_shadows = cast_shadows
@@ -765,6 +928,9 @@ pub fn (mut m Model) apply() {
 	C.egn_model_set_mesh(m.handle, m.mesh.id)
 	C.egn_model_set_texture(m.handle, m.texture.id)
 	C.egn_model_set_color(m.handle, m.color.r, m.color.g, m.color.b, m.color.a)
+	if !C.egn_model_set_pbr(m.handle, m.metallic, m.roughness) {
+		C.egn_model_get_pbr(m.handle, &m.metallic, &m.roughness)
+	}
 	C.egn_model_set_cast_shadows(m.handle, m.cast_shadows)
 	C.egn_component_set_enabled(m.handle, m.enabled)
 }
@@ -1097,3 +1263,13 @@ pub fn (mut p Particles) apply() {
 	C.egn_particles_set_color_end(p.handle, p.color_end.r, p.color_end.g, p.color_end.b, p.color_end.a)
 	C.egn_component_set_enabled(p.handle, p.enabled)
 }
+
+// Set camera viewports in normalized window coordinates.
+pub fn (c Camera2D) set_viewport(viewport Viewport) {
+    C.egn_camera_set_viewport(c.handle, viewport.x, viewport.y, viewport.width, viewport.height)
+}
+pub fn (c Canvas) set_viewport(viewport Viewport) {
+    C.egn_camera_set_viewport(c.handle, viewport.x, viewport.y, viewport.width, viewport.height)
+}
+pub fn (c Camera2D) set_layer_mask(mask u32) { C.egn_camera_set_layer_mask(c.handle, mask) }
+pub fn (c Canvas) set_layer_mask(mask u32) { C.egn_camera_set_layer_mask(c.handle, mask) }

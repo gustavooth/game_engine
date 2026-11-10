@@ -1,84 +1,35 @@
-# EGN Web SDK (WASM + WebGPU)
+# EGN Web (WASM + WebGPU)
 
-This directory contains the browser build of EGN:
+O build Web executa o mesmo código V de `game/` e o mesmo SDK V `egn/` usados
+no Linux. O compilador V gera C para Emscripten, que liga o jogo ao núcleo C da
+engine e à física Jolt em um único módulo WebAssembly. Não existe uma cena ou
+SDK de jogo em JavaScript.
 
-- `engine/renderer/webgpu/`: the WebGPU renderer, WGSL shader modules and
-  engine-side asset parsers (`loaders/obj.js`, `loaders/glb.js`);
-- `web/sdk/`: the thin JavaScript ESM bridge (`egn.js` only);
-- `web/demo/`: the demo page and its JavaScript entry point;
-- `engine/platform/web/`: the Emscripten platform and the C bridge exposed to
-  JavaScript.
-
-The C scene graph, component logic and Jolt physics are compiled to
-WebAssembly. WebGPU is driven by the JavaScript renderer, which reads the wasm
-scene through a small bridge. The SDK only exposes the engine interface and
-component/asset helpers; OBJ/GLB parsing lives with the engine renderer, not in
-`web/sdk`. The math used by the renderer and loaders is
-imported from the engine's C math library compiled into the wasm module.
-
-## Build
+O código em `engine/platform/web/host.js` inicializa o backend do navegador,
+o canvas, os eventos de entrada e o renderizador interno WebGPU. Os módulos em
+`engine/renderer/webgpu/` implementam esse backend gráfico. O arquivo
+`web/demo/index.html` apenas fornece o canvas e chama a inicialização da engine.
+Os assets ficam pré-carregados no sistema de arquivos do WebAssembly e também
+são servidos ao backend WebGPU para carregamento de modelos e texturas.
 
 ```sh
-make emsdk     # first time only
-make naga      # installs wgpu/naga for WGSL validation
-make web       # builds wasm, SDK and demo in output/web
-make run-web   # opens output/web/index.html with Chromium WebGPU flags
+make emsdk
+make naga
+make web
+make run-web
 ```
 
-No Node.js, npm or bundler is required. Web shaders are authored in WGSL and
-validated/canonicalized by **naga** (from the wgpu project) during `make web`.
-WebGPU consumes WGSL directly; native Vulkan continues to use GLSL -> SPIR-V.
-`make web` copies the native ES modules directly into `output/web`. The first run also builds JoltC/Jolt for wasm
-(`make jolt-web`). `make run-web` only opens the generated HTML file (no HTTP
-server); it launches Chromium with file-access and WebGPU flags. Override
-`WEB_BROWSER=/path/to/chrome` if needed.
+O build usa `-gc none` no V, pois o coletor Boehm não está integrado ao alvo
+Emscripten. Jogos que façam alocações repetidas devem gerenciar sua vida útil;
+essa configuração não oferece coleta automática de lixo.
 
-## JavaScript SDK
+O build não exige Node.js ou npm. Para desenvolvimento, é possível servir
+`output/web` via HTTP em localhost; WebGPU também exige um navegador compatível.
+O backend usa Asyncify para suspender o loop V entre quadros e para carregar
+assets sem bloquear o navegador. VSync e apresentação de quadros no navegador
+são determinados pelo navegador e podem diferir do Vulkan nativo. F12 solicita
+um download da imagem do canvas.
 
-`web/sdk/egn.js` is a native ES module. The SDK has no build step; the files in
-`web/sdk` are the public sources.
-
-```js
-import createEgnModule from './engine.js';
-import * as EGN from './web/sdk/egn.js';
-
-const engine = await EGN.Engine.create({
-  canvas: document.querySelector('canvas'),
-  moduleFactory: createEgnModule,
-});
-
-const scene = engine.scene;
-const object = scene.createObject('Cube');
-object.setPosition(0, 1, 0);
-object.addModel({ mesh: engine.meshCube(), color: [0.2, 0.7, 1, 1] });
-
-engine.run(() => {
-  object.setEuler(0, performance.now() * 0.0004, 0);
-});
-```
-
-The SDK exports:
-
-- `Engine`, `Scene`, `Object`, `Input`;
-- `Mesh`, `Texture` and `loadOBJ` / `loadGLB` helpers;
-- components: `ModelComponent`, `CameraComponent`, `LightComponent`,
-  `RigidbodyComponent`, `ColliderComponent`, `AnimationComponent`,
-  `ParticlesComponent`;
-- helpers and types for colors, vectors, colliders and rigidbodies.
-
-The WebGPU renderer is available at `engine/renderer/webgpu/renderer.js`.
-
-## Scope
-
-The web renderer implements forward rendering with:
-
-- directional sun with a 2D shadow map (PCF);
-- up to 8 point lights;
-- vertex-colour/texture models, primitives, OBJ and skinned GLB meshes;
-- skeletal animation clips evaluated from the engine `Animation` component;
-- CPU-emitted, camera-facing particle billboards with lifetime, gravity,
-  drag, spread, colour/size over life and texture masks;
-- multiple cameras with viewport/layer masks;
-- WASM-driven Jolt physics (box, sphere and mesh colliders);
-- a thin JavaScript SDK and an FPS-style input controller;
-- math operations imported from the wasm core (`engine/math/math.c`).
+Os shaders WGSL são validados pelo Naga. O código V e as APIs de cena, física,
+texto e jogo são compartilhados; os backends Vulkan e WebGPU permanecem
+implementações gráficas diferentes.
