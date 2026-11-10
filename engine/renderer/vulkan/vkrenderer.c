@@ -207,9 +207,11 @@ void renderer_shutdown()
   vkrenderer_scene_shutdown(&ctx);
   vkrenderer_screenshot_shutdown(&ctx);
 
-  vkrenderer_mesh_destroy(&ctx, ctx.cube_mesh);
-  vkrenderer_mesh_destroy(&ctx, ctx.sphere_mesh);
-  vkrenderer_mesh_destroy(&ctx, ctx.sprite_mesh);
+  // Release every registered mesh, including OBJ/GLB assets loaded by the
+  // game. Destroying only the built-in primitives leaked their vertex/index
+  // buffers and backing memory on shutdown.
+  for (u32 i = 0; i < VKRENDERER_MAX_MESHES; i++)
+    vkrenderer_mesh_destroy(&ctx, i + 1);
   ctx.cube_mesh = 0;
   ctx.sphere_mesh = 0;
   ctx.sprite_mesh = 0;
