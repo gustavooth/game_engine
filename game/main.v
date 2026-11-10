@@ -32,7 +32,8 @@ import egn {
 // EGN feature demo.
 //
 // Controls:
-//   WASD ........ walk
+//   W/S ......... walk forward/backward along the view direction
+//   D ........... strafe right
 //   Space/Ctrl .. move up/down
 //   Mouse ....... look (click to capture the pointer)
 //   Esc ......... release the pointer
@@ -398,9 +399,6 @@ fn main() {
 		}
 		if app.key_down(.d) {
 			move = move.add(right)
-		}
-		if app.key_down(.a) {
-			move = move.sub(right)
 		}
 		if app.key_down(.space) {
 			move.y += 1.0

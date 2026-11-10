@@ -126,10 +126,6 @@ async function startDemo(EGN, moduleFactory) {
       move[0] += right[0];
       move[2] += right[2];
     }
-    if (input.isDown("KeyA")) {
-      move[0] -= right[0];
-      move[2] -= right[2];
-    }
     if (input.isDown("Space")) move[1] += 1;
     if (input.isDown("ControlLeft")) move[1] -= 1;
     const length = Math.hypot(move[0], move[1], move[2]);
@@ -161,7 +157,7 @@ async function startDemo(EGN, moduleFactory) {
       hud.innerHTML = `
         <strong>EGN WebGPU</strong><br>
         WASM + WebGPU \xB7 ${stats.objects} objetos \xB7 ${stats.drawCalls} draws \xB7 ${stats.shadowCasters} sombras<br>
-        ${fps} FPS \xB7 clique para travar o mouse \xB7 <kbd>WASD</kbd> mover \xB7 <kbd>Shift</kbd> correr \xB7 <kbd>Space/Ctrl</kbd> subir/descer
+        ${fps} FPS \xB7 clique para travar o mouse \xB7 <kbd>W/S/D</kbd> mover \xB7 <kbd>Shift</kbd> correr \xB7 <kbd>Space/Ctrl</kbd> subir/descer
       `;
     }
     requestAnimationFrame(loop);

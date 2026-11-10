@@ -388,7 +388,8 @@ Controles:
 
 | Tecla | Ação |
 | --- | --- |
-| `WASD` | W/S na direção da câmera, A/D strafe |
+| `W/S` | andar para frente/trás na direção da câmera |
+| `D` | strafe para a direita |
 | `Space` / `Ctrl` | subir / descer |
 | `Shift` | correr |
 | mouse | olhar (clique captura o ponteiro) |

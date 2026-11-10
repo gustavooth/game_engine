@@ -55,12 +55,6 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 
 static i32 evdev_to_key(u32 code)
 {
-  if (code >= 16 && code <= 25)
-    return 'Q' + (i32)(code - 16);
-  if (code >= 30 && code <= 38)
-    return 'A' + (i32)(code - 30);
-  if (code >= 44 && code <= 50)
-    return 'Z' + (i32)(code - 44);
   if (code >= 2 && code <= 10)
     return '1' + (i32)(code - 2);
   if (code >= 59 && code <= 68)
@@ -70,6 +64,34 @@ static i32 evdev_to_key(u32 code)
 
   switch (code)
   {
+  // Letter keys in evdev order. Do not use arithmetic on ASCII here: the
+  // keyboard ORDER is QWERTY, not alphabetical.
+  case 16: return KEY_Q;
+  case 17: return KEY_W;
+  case 18: return KEY_E;
+  case 19: return KEY_R;
+  case 20: return KEY_T;
+  case 21: return KEY_Y;
+  case 22: return KEY_U;
+  case 23: return KEY_I;
+  case 24: return KEY_O;
+  case 25: return KEY_P;
+  case 30: return KEY_A;
+  case 31: return KEY_S;
+  case 32: return KEY_D;
+  case 33: return KEY_F;
+  case 34: return KEY_G;
+  case 35: return KEY_H;
+  case 36: return KEY_J;
+  case 37: return KEY_K;
+  case 38: return KEY_L;
+  case 44: return KEY_Z;
+  case 45: return KEY_X;
+  case 46: return KEY_C;
+  case 47: return KEY_V;
+  case 48: return KEY_B;
+  case 49: return KEY_N;
+  case 50: return KEY_M;
   case 1: return KEY_ESCAPE;
   case 11: return '0';
   case 12: return KEY_MINUS;
