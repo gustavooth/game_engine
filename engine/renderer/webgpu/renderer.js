@@ -13,7 +13,9 @@ const COMPONENT_PARTICLES = 7;
 const LIGHT_DIRECTIONAL = 0;
 const LIGHT_POINT = 1;
 const SHADOW_CASCADES = 4;
-const GLOBALS_FLOATS = 176;
+// Must match Globals in scene.wgsl/sky.wgsl: 108 floats before the point-light
+// array, 8 lights * 2 vec4 = 64 floats, then inverse VP/atmosphere/fog/time.
+const GLOBALS_FLOATS = 208;
 const OBJECT_FLOATS = 44;
 
 function shadowSizeForQuality(quality) {
@@ -358,7 +360,7 @@ class WebGPURenderer {
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
-        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "storage" } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
         { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "3d" } }
       ]
     });
@@ -535,6 +537,16 @@ class WebGPURenderer {
       })
     };
     this.textures.set(0, this.solidTexture);
+    this.defaultMaterialBindGroup = this.device.createBindGroup({
+      layout: this.materialLayout,
+      entries: [
+        { binding: 0, resource: white.view },
+        { binding: 1, resource: flatNormal.view },
+        { binding: 2, resource: white.view },
+        { binding: 3, resource: black.view },
+        { binding: 4, resource: this.materialSampler }
+      ]
+    });
 
     const lutTexture = this.device.createTexture({
       label: "egn-identity-lut",
@@ -1417,20 +1429,20 @@ class WebGPURenderer {
       data.set([light.world[12], light.world[13], light.world[14], light.range], 108 + i * 8);
       data.set([light.color[0], light.color[1], light.color[2], light.intensity], 112 + i * 8);
     }
-    data.set(this.math.mat4.inverse(viewProjection), 140);
+    data.set(this.math.mat4.inverse(viewProjection), 172);
     const steps = [6, 10, 16, 24][settings.atmosphere_quality ?? 2] ?? 16;
     const lightSteps = [1, 2, 3, 4][settings.atmosphere_quality ?? 2] ?? 3;
     data.set([settings.atmosphere_rayleigh ?? 1, settings.atmosphere_mie ?? 0.0035,
-      settings.atmosphere_turbidity ?? 2.4, settings.atmosphere_mie_anisotropy ?? 0.76], 156);
+      settings.atmosphere_turbidity ?? 2.4, settings.atmosphere_mie_anisotropy ?? 0.76], 188);
     data.set([settings.atmosphere_sun_intensity ?? 20, steps, lightSteps,
-      (settings.atmosphere_enabled ?? true) ? 1 : 0], 160);
+      (settings.atmosphere_enabled ?? true) ? 1 : 0], 192);
     data.set([settings.fog_density ?? 0.008, settings.fog_height_falloff ?? 0.12,
-      (settings.fog_enabled ?? true) ? 1 : 0, 0], 164);
+      (settings.fog_enabled ?? true) ? 1 : 0, 0], 196);
     const sunColor = sun?.color ?? [1, 1, 1];
     data.set([0.20 * (0.35 + 0.65 * day) + sunColor[0] * 0.05,
       0.28 * (0.35 + 0.65 * day) + sunColor[1] * 0.05,
-      0.36 * (0.35 + 0.65 * day) + sunColor[2] * 0.05, 0], 168);
-    data.set([this.elapsedTime, 0, 0, 0], 172);
+      0.36 * (0.35 + 0.65 * day) + sunColor[2] * 0.05, 0], 200);
+    data.set([this.elapsedTime, 0, 0, 0], 204);
     this.device.queue.writeBuffer(gpu.buffer, 0, data);
     return gpu;
   }
@@ -1700,6 +1712,7 @@ class WebGPURenderer {
           const texture = this.textures.get(sprite.texture) ?? this.solidTexture;
           pass.setBindGroup(1, gpu.bindGroup);
           pass.setBindGroup(2, texture.bindGroup);
+          pass.setBindGroup(3, this.defaultMaterialBindGroup);
           pass.setVertexBuffer(0, mesh.vertexBuffer);
           pass.setIndexBuffer(mesh.indexBuffer, "uint32");
           pass.drawIndexed(mesh.indexCount);

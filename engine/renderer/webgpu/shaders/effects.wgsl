@@ -19,8 +19,14 @@ fn hash12(p: vec2f) -> f32 {
   return fract((p3b.x + p3b.y) * p3b.z);
 }
 
+fn loadDepth(uv: vec2f) -> f32 {
+  let dims = textureDimensions(sceneDepth, 0);
+  let coord = vec2i(clamp(uv * vec2f(dims), vec2f(0.0), vec2f(dims - vec2u(1u))));
+  return textureLoad(sceneDepth, coord, 0);
+}
+
 fn reconstructWorld(uv: vec2f, depth: f32) -> vec3f {
-  let ndc = uv * 2.0 - 1.0;
+  let ndc = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
   let world = pc.inverseViewProjection * vec4f(ndc, depth, 1.0);
   return world.xyz / world.w;
 }
@@ -41,13 +47,14 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  let depth = textureSample(sceneDepth, depthSampler, input.uv);
-  let normal = textureSample(sceneNormal, colourSampler, input.uv).xyz;
+  let uv = vec2f(input.uv.x, 1.0 - input.uv.y);
+  let depth = loadDepth(uv);
+  let normal = textureSampleLevel(sceneNormal, colourSampler, uv, 0.0).xyz;
   if (depth >= 0.9999 || dot(normal, normal) < 0.01) {
     return vec4f(0.0, 0.0, 0.0, 1.0);
   }
 
-  let worldPosition = reconstructWorld(input.uv, depth);
+  let worldPosition = reconstructWorld(uv, depth);
   let cameraPosition = pc.cameraPosition.xyz;
   let radius = pc.params.x;
   let samples = i32(pc.params2.x);
@@ -84,8 +91,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
       continue;
     }
 
-    let sampleUv = ndc.xy * 0.5 + 0.5;
-    let sampleDepth = textureSample(sceneDepth, depthSampler, sampleUv);
+    let sampleUv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    let sampleDepth = loadDepth(sampleUv);
     if (sampleDepth >= 0.9999) {
       continue;
     }
@@ -105,7 +112,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
       let distanceToSurface = length(scenePosition - worldPosition);
       if (distanceToSurface < giDistance) {
         let falloff = 1.0 - clamp(distanceToSurface / giDistance, 0.0, 1.0);
-        gi += textureSample(sceneColour, colourSampler, sampleUv).rgb * weight * falloff;
+        gi += textureSampleLevel(sceneColour, colourSampler, sampleUv, 0.0).rgb * weight * falloff;
         giWeight += weight * falloff;
       }
     }

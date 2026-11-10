@@ -23,7 +23,8 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  var colour = textureSample(sourceTexture, sourceSampler, input.uv).rgb;
+  let uv = vec2f(input.uv.x, 1.0 - input.uv.y);
+  var colour = textureSample(sourceTexture, sourceSampler, uv).rgb;
   if (pc.params2.w > 0.5) {
     colour = max(colour - pc.params.z, vec3f(0.0));
   }
@@ -37,8 +38,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
       break;
     }
     let weight = 1.0 / (1.0 + f32(i));
-    sum += (textureSample(sourceTexture, sourceSampler, input.uv + step * f32(i)).rgb +
-            textureSample(sourceTexture, sourceSampler, input.uv - step * f32(i)).rgb) * weight;
+    sum += (textureSample(sourceTexture, sourceSampler, uv + step * f32(i)).rgb +
+            textureSample(sourceTexture, sourceSampler, uv - step * f32(i)).rgb) * weight;
     total += 2.0 * weight;
   }
 

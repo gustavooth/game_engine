@@ -83,14 +83,15 @@ fn apply_tonemap(colour: vec3f, mapper: i32) -> vec3f {
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  var colour = textureSample(sceneTexture, sceneSampler, input.uv).rgb;
+  let uv = vec2f(input.uv.x, 1.0 - input.uv.y);
+  var colour = textureSample(sceneTexture, sceneSampler, uv).rgb;
   let effectTexel = 1.0 / vec2f(textureDimensions(effectsTexture, 0));
   var effects = vec4f(0.0);
   var effectWeight = 0.0;
   for (var y = -2; y <= 2; y = y + 1) {
     for (var x = -2; x <= 2; x = x + 1) {
       effects += textureSample(effectsTexture, sceneSampler,
-          input.uv + vec2f(f32(x), f32(y)) * effectTexel);
+          uv + vec2f(f32(x), f32(y)) * effectTexel);
       effectWeight += 1.0;
     }
   }
@@ -98,7 +99,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let ao = mix(1.0, effects.a, pc.effects.x * pc.effects.w);
   let gi = effects.rgb * pc.effects.y * pc.effects.z;
   colour = colour * ao + gi;
-  colour += textureSample(bloomTexture, sceneSampler, input.uv).rgb *
+  colour += textureSample(bloomTexture, sceneSampler, uv).rgb *
       pc.bloom.x * pc.bloom.y;
 
   let exposure = select(pc.exposureMode.y,
@@ -137,7 +138,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     colour = mix(colour, graded, clamp(pc.gamma.w, 0.0, 1.0));
   }
 
-  let centered = input.uv * 2.0 - 1.0;
+  let centered = uv * 2.0 - 1.0;
   let vignette = smoothstep(0.35, 1.25, dot(centered, centered));
   colour *= 1.0 - vignette * pc.lift.a;
 
