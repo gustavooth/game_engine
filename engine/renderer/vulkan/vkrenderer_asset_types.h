@@ -1,7 +1,7 @@
 #pragma once
 
 #include "defines.h"
-#include "math/math.h"
+#include "platform/math.h"
 
 #define EGN_MAX_JOINTS 128
 #define EGN_ANIMATION_NAME_MAX 64

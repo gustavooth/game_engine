@@ -71,8 +71,8 @@
 
     <script type="module">
       import createEgnModule from './engine.js';
-      import * as EGN from './egn.js';
-      import { startDemo } from './demo.js';
+      import * as EGN from './web/sdk/egn.js';
+      import { startDemo } from './web/demo/main.js';
 
       startDemo(EGN, createEgnModule).catch((error) => {
         const status = document.querySelector('#status');

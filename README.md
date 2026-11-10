@@ -23,7 +23,7 @@ do módulo **EGN** (`egn/`).
   com fila de eventos e mensagens com tamanho prefixado no TCP.
 - **Demo:** personagem Fox animado, chão, física, partículas, luzes, câmera FPS
   com pointer lock real no Wayland e captura de tela.
-- **Web:** build WASM + WebGPU para canvas, renderer WebGPU, SDK JS/TS e demo
+- **Web:** build WASM + WebGPU para canvas, renderer WebGPU, SDK JS e demo
   web com física, OBJ/GLB, luzes, sombras e câmera FPS.
 
 ## Arquitetura
@@ -414,14 +414,16 @@ Consulte `game/assets/models/LICENSE_FOX.md`.
 
 O build web usa Emscripten e expõe o núcleo C (cena, componentes e Jolt) como
 WebAssembly. O renderer WebGPU fica em `engine/renderer/webgpu/` e o SDK em
-`web/sdk/` (TypeScript, com bundle `egn.js` e `egn.d.ts`).
+`web/sdk/` (JavaScript ESM puro, sem Node/npm). A matemática da engine fica em
+`engine/platform/math.h` com implementações `linux/math_linux.c` e
+`web/math_web.c`, selecionadas pela definição da plataforma.
 
 Primeira vez:
 
 ```sh
 make emsdk    # instala o Emscripten SDK em third_part/
-make web      # gera wasm, SDK e demo em web/dist/
-make web-run  # serve em http://localhost:8091
+make web      # gera wasm, SDK JS e demo em web/dist/
+make run-web  # serve em http://localhost:8091
 ```
 
 O WebGPU exige um contexto seguro (localhost/HTTPS) e um navegador com suporte

@@ -2,7 +2,7 @@
 
 #include "core/asserts.h"
 #include "defines.h"
-#include "math/math.h"
+#include "platform/math.h"
 #include "renderer/renderer_types.h"
 #include "renderer/vulkan/vkrenderer_asset_types.h"
 #include <vulkan/vulkan.h>

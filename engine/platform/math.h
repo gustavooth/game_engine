@@ -1,7 +1,119 @@
 #pragma once
 
-#include "math_types.h"
+#include "defines.h"
 #include "core/memo.h"
+
+// Platform math interface. The implementation is selected at compile time by
+// the platform definition (EGNPLATFORM_WEB / EGNPLATFORM_LINUX) and linked
+// from engine/platform/<platform>/math_<platform>.c.
+typedef struct EgnMathInterface
+{
+  const char *name;
+  f32 (*sin)(f32 x);
+  f32 (*cos)(f32 x);
+  f32 (*tan)(f32 x);
+  f32 (*acos)(f32 x);
+  f32 (*sqrt)(f32 x);
+  f32 (*abs)(f32 x);
+  i32 (*random)(void);
+  i32 (*random_range)(i32 min, i32 max);
+  f32 (*frandom)(void);
+  f32 (*frandom_range)(f32 min, f32 max);
+} EgnMathInterface;
+
+#if defined(EGNPLATFORM_WEB)
+#define EGN_MATH_PLATFORM_NAME "web"
+#elif defined(EGNPLATFORM_LINUX)
+#define EGN_MATH_PLATFORM_NAME "linux"
+#else
+#error "No math platform backend selected"
+#endif
+
+const EgnMathInterface *egn_math_interface(void);
+
+typedef union vec2_u
+{
+    // An array of x, y
+    f32 elements[2];
+    struct
+    {
+        union
+        {
+            // The first element.
+            f32 x, r, s, u;
+        };
+        union
+        {
+            // The second element.
+            f32 y, g, t, v;
+        };
+    };
+} vec2;
+
+typedef struct vec3_u
+{
+    union
+    {
+        // An array of x, y, z
+        f32 elements[3];
+        struct
+        {
+            union
+            {
+                // The first element.
+                f32 x, r, s, u;
+            };
+            union
+            {
+                // The second element.
+                f32 y, g, t, v;
+            };
+            union
+            {
+                // The third element.
+                f32 z, b, p, w;
+            };
+        };
+    };
+} vec3;
+
+typedef union vec4_u
+{
+    // An array of x, y, z, w
+    f32 elements[4];
+    union
+    {
+        struct
+        {
+            union
+            {
+                // The first element.
+                f32 x, r, s;
+            };
+            union
+            {
+                // The second element.
+                f32 y, g, t;
+            };
+            union
+            {
+                // The third element.
+                f32 z, b, p;
+            };
+            union
+            {
+                // The fourth element.
+                f32 w, a, q;
+            };
+        };
+    };
+} vec4;
+
+typedef union mat4 {
+    f32 data[16];
+} mat4;
+
+typedef vec4 quat;
 
 #define EGN_PI (3.14159265358979323846f)
 #define EGN_TWO_PI (2.0f * EGN_PI)

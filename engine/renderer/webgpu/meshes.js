@@ -1,16 +1,6 @@
-// Built-in procedural meshes. Vertices are interleaved as:
-// position.xyz, normal.xyz, uv.xy (8 floats, 32 bytes).
-
-export const VERTEX_FLOATS = 8;
-export const VERTEX_STRIDE = VERTEX_FLOATS * 4;
-
-export interface MeshData {
-  vertices: Float32Array;
-  indices: Uint32Array;
-  positions: Float32Array;
-}
-
-function mesh(vertices: number[], indices: number[]): MeshData {
+const VERTEX_FLOATS = 8;
+const VERTEX_STRIDE = VERTEX_FLOATS * 4;
+function mesh(vertices, indices) {
   const v = new Float32Array(vertices);
   const positions = new Float32Array(v.length / VERTEX_FLOATS * 3);
   for (let i = 0, p = 0; i < v.length; i += VERTEX_FLOATS, p += 3) {
@@ -20,39 +10,39 @@ function mesh(vertices: number[], indices: number[]): MeshData {
   }
   return { vertices: v, indices: new Uint32Array(indices), positions };
 }
-
-export function createCube(): MeshData {
-  const vertices: number[] = [];
-  const indices: number[] = [];
-
-  const faces: Array<[number[], number[][]]> = [
+function createCube() {
+  const vertices = [];
+  const indices = [];
+  const faces = [
     [[0, 0, 1], [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]]],
     [[0, 0, -1], [[1, -1, -1], [-1, -1, -1], [-1, 1, -1], [1, 1, -1]]],
     [[1, 0, 0], [[1, -1, 1], [1, -1, -1], [1, 1, -1], [1, 1, 1]]],
     [[-1, 0, 0], [[-1, -1, -1], [-1, -1, 1], [-1, 1, 1], [-1, 1, -1]]],
     [[0, 1, 0], [[-1, 1, 1], [1, 1, 1], [1, 1, -1], [-1, 1, -1]]],
-    [[0, -1, 0], [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]]],
+    [[0, -1, 0], [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]]]
   ];
-
   const uvs = [[0, 1], [1, 1], [1, 0], [0, 0]];
   for (const [normal, corners] of faces) {
     const base = vertices.length / VERTEX_FLOATS;
     for (let i = 0; i < 4; i++) {
       vertices.push(
-        corners[i][0] * 0.5, corners[i][1] * 0.5, corners[i][2] * 0.5,
-        normal[0], normal[1], normal[2],
-        uvs[i][0], uvs[i][1],
+        corners[i][0] * 0.5,
+        corners[i][1] * 0.5,
+        corners[i][2] * 0.5,
+        normal[0],
+        normal[1],
+        normal[2],
+        uvs[i][0],
+        uvs[i][1]
       );
     }
     indices.push(base, base + 1, base + 2, base + 2, base + 3, base);
   }
   return mesh(vertices, indices);
 }
-
-export function createSphere(sectors = 32, stacks = 16): MeshData {
-  const vertices: number[] = [];
-  const indices: number[] = [];
-
+function createSphere(sectors = 32, stacks = 16) {
+  const vertices = [];
+  const indices = [];
   for (let stack = 0; stack <= stacks; stack++) {
     const v = stack / stacks;
     const phi = v * Math.PI;
@@ -69,7 +59,6 @@ export function createSphere(sectors = 32, stacks = 16): MeshData {
       vertices.push(x, y, z, nx, ny, nz, u, 1 - v);
     }
   }
-
   for (let stack = 0; stack < stacks; stack++) {
     for (let sector = 0; sector < sectors; sector++) {
       const a = stack * (sectors + 1) + sector;
@@ -79,13 +68,47 @@ export function createSphere(sectors = 32, stacks = 16): MeshData {
   }
   return mesh(vertices, indices);
 }
-
-export function createQuad(): MeshData {
+function createQuad() {
   const vertices = [
-    -0.5, -0.5, 0, 0, 0, 1, 0, 1,
-    0.5, -0.5, 0, 0, 0, 1, 1, 1,
-    0.5, 0.5, 0, 0, 0, 1, 1, 0,
-    -0.5, 0.5, 0, 0, 0, 1, 0, 0,
+    -0.5,
+    -0.5,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    0.5,
+    -0.5,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    0.5,
+    0.5,
+    0,
+    0,
+    0,
+    1,
+    1,
+    0,
+    -0.5,
+    0.5,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0
   ];
   return mesh(vertices, [0, 1, 2, 2, 3, 0]);
 }
+export {
+  VERTEX_FLOATS,
+  VERTEX_STRIDE,
+  createCube,
+  createQuad,
+  createSphere
+};

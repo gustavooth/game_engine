@@ -161,16 +161,19 @@ SDK_MANIFEST := egn/v.mod
 GAME_ASSETS_SRC := $(shell find $(GAME_DIR)/assets -type f 2>/dev/null)
 GAME_ASSETS := $(patsubst $(GAME_DIR)/assets/%,$(BIN_DIR)/assets/%,$(GAME_ASSETS_SRC))
 
-# Web build: C core compiled to wasm, JS/TS SDK + WebGPU renderer bundled by
-# esbuild. Physics uses the same Jolt sources rebuilt for wasm.
+# Web build: the C core (scene, components, physics and math) is compiled to
+# wasm. The browser-native JS SDK/WebGPU renderer is copied next to it; no
+# Node/npm/bundler is required. Physics uses the same Jolt sources rebuilt for
+# wasm and math_web.c is the platform math backend.
 WEB_C_SRC := \
 	$(ENGINE_DIR)/platform/web/platform_web.c \
 	$(ENGINE_DIR)/platform/web/web_bridge.c \
+	$(ENGINE_DIR)/platform/web/web_math.c \
+	$(ENGINE_DIR)/platform/web/math_web.c \
 	$(ENGINE_DIR)/core/memo.c \
 	$(ENGINE_DIR)/core/logger.c \
 	$(ENGINE_DIR)/core/egnstring.c \
 	$(ENGINE_DIR)/containers/egnarray.c \
-	$(ENGINE_DIR)/math/math.c \
 	$(ENGINE_DIR)/scene/scene.c \
 	$(ENGINE_DIR)/scene/component.c \
 	$(ENGINE_DIR)/physics/physics.c
@@ -186,7 +189,7 @@ V_PATH := $(abspath $(GAME_DIR)/..)|@vlib|@vmodules
 # Targets
 # -----------------------------------------------------------------------------
 
-.PHONY: all build engine game run clean v jolt emsdk jolt-web web web-sdk web-run clean-web help
+.PHONY: all build engine game run clean v jolt emsdk jolt-web web run-web clean-web help
 
 all: engine game
 
@@ -205,7 +208,7 @@ $(WEB_BUILD_DIR)/%.o: $(ENGINE_DIR)/%.c | $(JOLT_WEB_STAMP)
 	@$(MKDIR) $(dir $@)
 	@$(EMCC) $(WEB_CFLAGS) -c $< -o $@
 
-$(WEB_EXPORTS): $(ENGINE_DIR)/scene/scene.h $(ENGINE_DIR)/platform/web/web_bridge.c
+$(WEB_EXPORTS): $(ENGINE_DIR)/scene/scene.h $(ENGINE_DIR)/platform/web/web_bridge.c $(ENGINE_DIR)/platform/web/web_math.c
 	@echo "  WASM-EXPORTS $@"
 	@$(MKDIR) $(dir $@)
 	@(grep -hoE 'egn_[a-zA-Z0-9_]+' $^ | sort -u | sed 's/^/_/' ; echo _malloc; echo _free) > $@
@@ -220,17 +223,18 @@ $(WEB_ENGINE_JS): $(WEB_OBJ) $(JOLT_WEB_LIBS) $(WEB_EXPORTS)
 		-sEXPORTED_FUNCTIONS=@$(WEB_EXPORTS) \
 		-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPF32,HEAPU32
 
-web: $(WEB_ENGINE_JS) web-sdk
+web: $(WEB_ENGINE_JS)
+	@echo "  WEB  copying JavaScript SDK and demo"
+	@rm -rf $(WEB_DIST)/web $(WEB_DIST)/engine $(WEB_DIST)/assets
+	@$(MKDIR) $(WEB_DIST)/web $(WEB_DIST)/engine/renderer $(WEB_DIST)/assets
+	@$(COPY) -r $(WEB_DIR)/sdk $(WEB_DIST)/web/sdk
+	@$(COPY) -r $(WEB_DIR)/demo $(WEB_DIST)/web/demo
+	@$(COPY) -r $(ENGINE_DIR)/renderer/webgpu $(WEB_DIST)/engine/renderer/webgpu
+	@$(COPY) $(WEB_DIR)/demo/index.html $(WEB_DIST)/index.html
+	@$(COPY) -r $(GAME_DIR)/assets/. $(WEB_DIST)/assets/
 	@echo "  WEB  demo ready in $(WEB_DIST)/"
 
-web-sdk: $(WEB_ENGINE_JS)
-	@if [ ! -d $(WEB_DIR)/node_modules ]; then \
-		echo "  NPM  installing web SDK dependencies"; \
-		cd $(WEB_DIR) && npm install; \
-	fi
-	@cd $(WEB_DIR) && node build.mjs
-
-web-run: web
+run-web: web
 	@echo "  WEB  serving $(WEB_DIST) at http://localhost:$(WEB_PORT)/"
 	@cd $(WEB_DIST) && python3 -m http.server $(WEB_PORT)
 
@@ -365,8 +369,8 @@ help:
 	@echo "  make jolt         clone/build JoltC + Jolt in third_part/"
 	@echo "  make emsdk        clone/install Emscripten in third_part/"
 	@echo "  make jolt-web     build JoltC/Jolt for WebAssembly"
-	@echo "  make web          build wasm core + JS/TS SDK + WebGPU demo"
-	@echo "  make web-run      build and serve the demo on WEB_PORT=$(WEB_PORT)"
+	@echo "  make web          build wasm core + JS SDK + WebGPU demo"
+	@echo "  make run-web      build and serve the demo on WEB_PORT=$(WEB_PORT)"
 	@echo "  make clean-web    remove web build artifacts"
 	@echo "  make help         show this help"
 	@echo ""

@@ -2,7 +2,7 @@
 
 #include "defines.h"
 #include "core/asserts.h"
-#include "math/math.h"
+#include "platform/math.h"
 
 typedef struct RenderPacket
 {
