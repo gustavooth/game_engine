@@ -305,6 +305,32 @@ export class Object {
     return this.setEuler(x * d, y * d, z * d);
   }
 
+  // setLookAngles orienta uma camera livre a partir de pitch/yaw/roll em
+  // radianos (ordem yaw * pitch * roll, igual ao SDK V).
+  setLookAngles(pitch: number, yaw: number, roll = 0): this {
+    const halfPitch = pitch * 0.5;
+    const halfYaw = yaw * 0.5;
+    const halfRoll = roll * 0.5;
+    const sx = Math.sin(halfPitch);
+    const cx = Math.cos(halfPitch);
+    const sy = Math.sin(halfYaw);
+    const cy = Math.cos(halfYaw);
+    const sz = Math.sin(halfRoll);
+    const cz = Math.cos(halfRoll);
+
+    const x1 = cy * sx;
+    const y1 = sy * cx;
+    const z1 = -sy * sx;
+    const w1 = cy * cx;
+
+    const x = x1 * cz + y1 * sz;
+    const y = -x1 * sz + y1 * cz;
+    const z = w1 * sz + z1 * cz;
+    const w = w1 * cz - z1 * sz;
+    this.engine.module._egn_object_set_rotation_quat(this.handle, x, y, z, w);
+    return this;
+  }
+
   setScale(x: number, y: number, z: number): this {
     this.engine.module._egn_object_set_scale(this.handle, x, y, z);
     return this;

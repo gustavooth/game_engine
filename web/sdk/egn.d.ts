@@ -232,6 +232,7 @@ declare class Object$1 {
 	position(): Vec3Tuple;
 	setEuler(x: number, y: number, z: number): this;
 	setEulerDeg(x: number, y: number, z: number): this;
+	setLookAngles(pitch: number, yaw: number, roll?: number): this;
 	setScale(x: number, y: number, z: number): this;
 	lookAt(x: number, y: number, z: number): this;
 	setLayer(layer: number): this;

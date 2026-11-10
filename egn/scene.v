@@ -266,6 +266,15 @@ pub fn (o Object) set_rotation_quat(rotation Quat) {
 	C.egn_object_set_rotation_quat(o.handle, rotation.x, rotation.y, rotation.z, rotation.w)
 }
 
+// set_look_angles orienta uma camera livre a partir de pitch/yaw/roll em
+// radianos. A ordem e yaw * pitch * roll, a mesma de uma camera FPS.
+pub fn (o Object) set_look_angles(pitch f32, yaw f32, roll f32) {
+	qy := quat_axis_angle(vec3(0, 1, 0), yaw)
+	qx := quat_axis_angle(vec3(1, 0, 0), pitch)
+	qz := quat_axis_angle(vec3(0, 0, 1), roll)
+	o.set_rotation_quat(qy.mul(qx).mul(qz))
+}
+
 pub fn (o Object) rotation() Quat {
 	mut x := f32(0)
 	mut y := f32(0)

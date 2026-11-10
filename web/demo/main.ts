@@ -127,11 +127,16 @@ export async function startDemo(EGN: EgnNamespace, moduleFactory: EGNT.EgnModule
       pitch = Math.min(1.45, Math.max(-1.45, pitch - dy * sensitivity));
     }
 
-    const forward: [number, number, number] = [-Math.sin(yaw), 0, -Math.cos(yaw)];
+    const cosPitch = Math.cos(pitch);
+    const forward: [number, number, number] = [
+      -Math.sin(yaw) * cosPitch,
+      Math.sin(pitch),
+      -Math.cos(yaw) * cosPitch,
+    ];
     const right: [number, number, number] = [Math.cos(yaw), 0, -Math.sin(yaw)];
     const move: [number, number, number] = [0, 0, 0];
-    if (input.isDown('KeyW')) { move[0] += forward[0]; move[2] += forward[2]; }
-    if (input.isDown('KeyS')) { move[0] -= forward[0]; move[2] -= forward[2]; }
+    if (input.isDown('KeyW')) { move[0] += forward[0]; move[1] += forward[1]; move[2] += forward[2]; }
+    if (input.isDown('KeyS')) { move[0] -= forward[0]; move[1] -= forward[1]; move[2] -= forward[2]; }
     if (input.isDown('KeyD')) { move[0] += right[0]; move[2] += right[2]; }
     if (input.isDown('KeyA')) { move[0] -= right[0]; move[2] -= right[2]; }
     if (input.isDown('Space')) move[1] += 1;
@@ -148,7 +153,7 @@ export async function startDemo(EGN: EgnNamespace, moduleFactory: EGNT.EgnModule
     }
 
     cameraObject.setPosition(...cameraPosition);
-    cameraObject.setEuler(pitch, yaw, 0);
+    cameraObject.setLookAngles(pitch, yaw, 0);
 
     fpsTime += dt;
     fpsFrames++;

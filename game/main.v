@@ -4,7 +4,6 @@ import math
 import egn {
 	Animation,
 	Camera,
-	Client,
 	Collider,
 	Color,
 	Light,
@@ -15,20 +14,17 @@ import egn {
 	Particles,
 	Projection,
 	Rigidbody,
-	Server,
 	Settings,
 	Sprite,
 	Texture,
 	Vec2,
 	Vec3,
 	Viewport,
-	client_create,
 	create,
 	log_error,
 	log_info,
 	rgb,
 	rgba,
-	server_create,
 	vec2,
 	vec3,
 }
@@ -46,102 +42,9 @@ import egn {
 //   F12 ......... save a screenshot
 //   LMB ......... (re)capture the pointer
 
-struct NetworkSmoke {
-mut:
-	tcp_server  Server
-	tcp_client  Client
-	udp_server  Server
-	udp_client  Client
-	tcp_sent    bool
-	tcp_replied bool
-	tcp_ok      bool
-	udp_sent    bool
-	udp_replied bool
-	udp_ok      bool
-}
-
-fn new_network_smoke() NetworkSmoke {
-	mut smoke := NetworkSmoke{}
-	smoke.tcp_server = server_create(42100, false) or {
-		log_error('network smoke: TCP server failed: ${err}')
-		Server{}
-	}
-	smoke.tcp_client = client_create('127.0.0.1', 42100, false) or {
-		log_error('network smoke: TCP client failed: ${err}')
-		Client{}
-	}
-	smoke.udp_server = server_create(42101, true) or {
-		log_error('network smoke: UDP server failed: ${err}')
-		Server{}
-	}
-	smoke.udp_client = client_create('127.0.0.1', 42101, true) or {
-		log_error('network smoke: UDP client failed: ${err}')
-		Client{}
-	}
-	return smoke
-}
-
-fn (mut smoke NetworkSmoke) poll() {
-	smoke.tcp_server.poll()
-	smoke.tcp_client.poll()
-
-	if !smoke.tcp_sent && smoke.tcp_client.connected() {
-		smoke.tcp_sent = smoke.tcp_client.send_text('hello from the TCP client')
-	}
-	for {
-		event := smoke.tcp_server.poll_event() or { break }
-		if event.event_type == .message {
-			log_info('network smoke: TCP server received "${event.message()}" from client ${event.client_id}')
-			if !smoke.tcp_replied {
-				smoke.tcp_replied = smoke.tcp_server.send_text(event.client_id, 'hello from the TCP server')
-			}
-		}
-	}
-	for {
-		event := smoke.tcp_client.poll_event() or { break }
-		if event.event_type == .message {
-			log_info('network smoke: TCP client received "${event.message()}"')
-			smoke.tcp_ok = true
-		}
-	}
-
-	smoke.udp_server.poll()
-	smoke.udp_client.poll()
-	if !smoke.udp_sent && smoke.udp_client.connected() {
-		smoke.udp_sent = smoke.udp_client.send_text('hello from the UDP client')
-	}
-	for {
-		event := smoke.udp_server.poll_event() or { break }
-		if event.event_type == .message {
-			log_info('network smoke: UDP server received "${event.message()}" from client ${event.client_id}')
-			if !smoke.udp_replied {
-				smoke.udp_replied = smoke.udp_server.send_text(event.client_id, 'hello from the UDP server')
-			}
-		}
-	}
-	for {
-		event := smoke.udp_client.poll_event() or { break }
-		if event.event_type == .message {
-			log_info('network smoke: UDP client received "${event.message()}"')
-			smoke.udp_ok = true
-		}
-	}
-
-	if smoke.tcp_ok && smoke.udp_ok {
-		// Keep polling so later messages and disconnect events are drained.
-	}
-}
-
-fn (mut smoke NetworkSmoke) destroy() {
-	smoke.tcp_client.destroy()
-	smoke.tcp_server.destroy()
-	smoke.udp_client.destroy()
-	smoke.udp_server.destroy()
-}
-
 fn main() {
 	mut app := create(Settings{
-		title:      'EGN - FPS / Networking / Physics / Particles'
+		title:      'EGN - FPS / Physics / Particles'
 		width:      1280
 		height:     720
 		x:          100
@@ -411,11 +314,6 @@ fn main() {
 
 	log_info('demo scene: root id ${scene.id()}, children ${scene.child_count()}')
 
-	mut smoke := new_network_smoke()
-	defer {
-		smoke.destroy()
-	}
-
 	// FPS controller state.
 	mut yaw := f32(0.0)
 	mut pitch := f32(-0.08)
@@ -483,7 +381,14 @@ fn main() {
 		}
 
 		mut move := vec3(0.0, 0.0, 0.0)
-		forward := vec3(-f32(math.sin(f64(yaw))), 0.0, -f32(math.cos(f64(yaw))))
+		// Forward follows the full view direction (including pitch); strafing
+		// remains horizontal so the camera can fly freely in 3D.
+		cos_pitch := f32(math.cos(f64(pitch)))
+		forward := vec3(
+			-f32(math.sin(f64(yaw))) * cos_pitch,
+			f32(math.sin(f64(pitch))),
+			-f32(math.cos(f64(yaw))) * cos_pitch,
+		)
 		right := vec3(f32(math.cos(f64(yaw))), 0.0, -f32(math.sin(f64(yaw))))
 		if app.key_down(.w) {
 			move = move.add(forward)
@@ -512,13 +417,11 @@ fn main() {
 			camera_position = camera_position.add(move.normalized().scale(move_speed * dt))
 		}
 		camera_object.set_position(camera_position)
-		camera_object.set_euler(vec3(pitch, yaw, 0.0))
+		camera_object.set_look_angles(pitch, yaw, 0.0)
 
 		// Animate the camp fire's light intensity slightly.
 		fire_light_object.set_position(vec3(2.4 + f32(math.sin(f64(f32(app.elapsed_time()) * 3.0))) * 0.08, 1.1,
 			-1.6 + f32(math.cos(f64(f32(app.elapsed_time()) * 2.3))) * 0.08))
-
-		smoke.poll()
 
 		app.frame()
 	}

@@ -22,7 +22,7 @@ do módulo **EGN** (`egn/`).
 - **Rede:** TCP e UDP, servidores, clientes e host (servidor + cliente local),
   com fila de eventos e mensagens com tamanho prefixado no TCP.
 - **Demo:** personagem Fox animado, chão, física, partículas, luzes, câmera FPS
-  com pointer lock real no Wayland, rede em localhost e captura de tela.
+  com pointer lock real no Wayland e captura de tela.
 - **Web:** build WASM + WebGPU para canvas, renderer WebGPU, SDK JS/TS e demo
   web com física, OBJ/GLB, luzes, sombras e câmera FPS.
 
@@ -388,7 +388,7 @@ Controles:
 
 | Tecla | Ação |
 | --- | --- |
-| `WASD` | andar |
+| `WASD` | W/S na direção da câmera, A/D strafe |
 | `Space` / `Ctrl` | subir / descer |
 | `Shift` | correr |
 | mouse | olhar (clique captura o ponteiro) |
@@ -398,8 +398,8 @@ Controles:
 | `F2` | alterna limite de FPS (off/60/120/144) |
 | `F12` | salva `screenshot.png` |
 
-No boot o demo faz um smoke test de rede TCP e UDP em localhost e imprime o
-resultado no log.
+A camada de rede continua disponível no SDK (`egn/network.v`), mas o demo
+principal não abre sockets.
 
 ## Assets de terceiros
 
