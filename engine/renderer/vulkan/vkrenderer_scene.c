@@ -1,5 +1,6 @@
 #include "vkrenderer_scene.h"
 #include "renderer/renderer.h"
+#include "renderer/renderer_settings.h"
 #include "vkrenderer_skin.h"
 #include "vkrenderer_lighting.h"
 #include "vkrenderer_particles.h"
@@ -32,6 +33,14 @@ typedef struct SceneCameraInfo
   i32 order;
   u32 sequence;
 } SceneCameraInfo;
+
+static b8 primary_camera_shadow_info(VkContext *ctx, mat4 *out_view, f32 *out_fov,
+                                     f32 *out_aspect, f32 *out_near, f32 *out_far,
+                                     vec3 *out_position);
+static void compute_shadow_cascades(const RendererGraphicsSettings *settings,
+                                    mat4 view, f32 fov, f32 aspect, f32 camera_near,
+                                    f32 camera_far, vec3 camera_position, vec3 sun_direction,
+                                    VkRendererLighting *lighting);
 
 static f32 clampf(f32 value, f32 minimum, f32 maximum)
 {
@@ -518,17 +527,6 @@ static void collect_lights_recursive(EgnObject *object, VkRendererLighting *ligh
       vec3 to_sun = vec3_mul_scalar(shine, -1.0f);
       lighting->sun_direction = vec4_create(to_sun.x, to_sun.y, to_sun.z, light->intensity);
       lighting->sun_color = vec4_create(light->r, light->g, light->b, 0.68f);
-
-      vec3 center = vec3_zero();
-      vec3 up = vec3_up();
-      if (egnabs(vec3_dot(shine, up)) > 0.99f)
-        up = vec3_back();
-
-      vec3 light_position = vec3_sub(center, vec3_mul_scalar(shine, 350.0f));
-      mat4 view = mat4_look_at(light_position, center, up);
-      // Wide enough to cover the large block island (about 288 units across).
-      mat4 projection = mat4_orthographic(-200.0f, 200.0f, -200.0f, 200.0f, 0.1f, 800.0f);
-      lighting->sun_view_projection = mat4_mul(projection, view);
       lighting->point_count.y = light->cast_shadows ? 1.0f : 0.0f;
       *has_sun = true;
     }
@@ -672,24 +670,45 @@ b8 vkrenderer_scene_prepare(VkContext *ctx, VkRendererCommandBuffer *command_buf
   lighting.ambient = vec4_create(0.09f, 0.10f, 0.13f, 1.0f);
   lighting.sun_direction = vec4_create(0.0f, -1.0f, 0.0f, 0.0f);
   lighting.sun_color = vec4_create(0.0f, 0.0f, 0.0f, 0.0f);
-  lighting.sun_view_projection = mat4_identity();
-  lighting.point_count = vec4_create(0.0f, 0.0f,
-                                     1.0f / (f32)VKRENDERER_SHADOW_SIZE,
-                                     1.0f / (f32)VKRENDERER_SHADOW_SIZE);
+  lighting.camera_position = vec4_create(0.0f, 0.0f, 0.0f, 0.0f);
+  for (u32 cascade = 0; cascade < VKRENDERER_MAX_SHADOW_CASCADES; cascade++)
+    lighting.sun_view_projection[cascade] = mat4_identity();
+  lighting.cascade_splits = vec4_create(0.0f, 0.0f, 0.0f, 0.0f);
+  lighting.point_count = vec4_create(0.0f, 0.0f, 0.0f, 0.0f);
 
   b8 has_sun = false;
   if (scene && scene->root)
     collect_lights_recursive(scene->root, &lighting, &has_sun);
 
-  RendererGraphicsSettings graphics = renderer_get_graphics_settings();
-  if (!graphics.shadows_enabled)
-    lighting.point_count.y = 0.0f;
-  lighting.point_count.w = (f32)graphics.shadow_quality;
+  RendererGraphicsSettings graphics = renderer_get_active_graphics_settings();
+  u32 shadow_size = renderer_graphics_settings_shadow_size(&graphics);
+  u32 cascades = renderer_graphics_settings_cascades(&graphics);
+  lighting.shadow_params = vec4_create(1.0f / (f32)shadow_size, 0.0f,
+                                       (f32)cascades, graphics.shadow_softness);
+
+  if (graphics.shadows_enabled && has_sun && lighting.point_count.y > 0.5f)
+  {
+    mat4 view;
+    f32 fov, aspect, camera_near, camera_far;
+    vec3 camera_position;
+    if (primary_camera_shadow_info(ctx, &view, &fov, &aspect, &camera_near,
+                                   &camera_far, &camera_position))
+    {
+      vec3 sun_direction = vec3_create(lighting.sun_direction.x,
+                                       lighting.sun_direction.y,
+                                       lighting.sun_direction.z);
+      lighting.camera_position = vec4_create(camera_position.x, camera_position.y,
+                                             camera_position.z, 1.0f);
+      compute_shadow_cascades(&graphics, view, fov, aspect, camera_near, camera_far,
+                              camera_position, sun_direction, &lighting);
+      lighting.shadow_params.y = 1.0f;
+    }
+  }
 
   vkrenderer_lighting_write(ctx, &lighting);
   vkrenderer_skin_barrier(ctx, command_buffer);
 
-  return has_sun && lighting.point_count.y > 0.5f;
+  return has_sun && lighting.shadow_params.y > 0.5f;
 }
 
 typedef struct ShadowPushConstants
@@ -701,7 +720,7 @@ typedef struct ShadowPushConstants
 typedef char ShadowPushConstants_size_check[(sizeof(ShadowPushConstants) == 68) ? 1 : -1];
 
 static void render_shadows_recursive(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
-                                     EgnObject *object, const VkRendererLighting *lighting)
+                                     EgnObject *object, mat4 light_view_projection)
 {
   if (!object || !object->alive || !object->active)
     return;
@@ -724,7 +743,7 @@ static void render_shadows_recursive(VkContext *ctx, VkRendererCommandBuffer *co
     egn_object_get_world_matrix_internal(object, &world);
 
     ShadowPushConstants push = {0};
-    push.mvp = mat4_mul(lighting->sun_view_projection, world);
+    push.mvp = mat4_mul(light_view_projection, world);
     push.bone_offset = model->bone_offset;
 
     vkCmdPushConstants(command_buffer->handle, ctx->shadow_shader.pipeline.layout,
@@ -745,32 +764,25 @@ static void render_shadows_recursive(VkContext *ctx, VkRendererCommandBuffer *co
   }
 
   for (EgnObject *child = object->first_child; child; child = child->next_sibling)
-    render_shadows_recursive(ctx, command_buffer, child, lighting);
+    render_shadows_recursive(ctx, command_buffer, child, light_view_projection);
 }
 
 void vkrenderer_scene_render_shadows(VkContext *ctx, VkRendererCommandBuffer *command_buffer)
 {
   const VkRendererLighting *lighting = vkrenderer_lighting_current();
-  if (!lighting || lighting->point_count.y < 0.5f)
+  if (!lighting || lighting->shadow_params.y < 0.5f)
     return;
 
   u32 size = vkrenderer_lighting_shadow_size(ctx);
+  u32 cascade_count = (u32)(lighting->shadow_params.z + 0.5f);
+  if (cascade_count < 1)
+    cascade_count = 1;
+  if (cascade_count > VKRENDERER_MAX_SHADOW_CASCADES)
+    cascade_count = VKRENDERER_MAX_SHADOW_CASCADES;
 
   VkClearValue clear_value = {0};
   clear_value.depthStencil.depth = 1.0f;
   clear_value.depthStencil.stencil = 0;
-
-  VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-  begin_info.renderPass = vkrenderer_lighting_shadow_renderpass(ctx);
-  begin_info.framebuffer = vkrenderer_lighting_shadow_framebuffer(ctx);
-  begin_info.renderArea.offset.x = 0;
-  begin_info.renderArea.offset.y = 0;
-  begin_info.renderArea.extent.width = size;
-  begin_info.renderArea.extent.height = size;
-  begin_info.clearValueCount = 1;
-  begin_info.pClearValues = &clear_value;
-
-  vkCmdBeginRenderPass(command_buffer->handle, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
   VkViewport viewport;
   viewport.x = 0.0f;
@@ -786,40 +798,54 @@ void vkrenderer_scene_render_shadows(VkContext *ctx, VkRendererCommandBuffer *co
   scissor.extent.width = size;
   scissor.extent.height = size;
 
-  vkCmdSetViewport(command_buffer->handle, 0, 1, &viewport);
-  vkCmdSetScissor(command_buffer->handle, 0, 1, &scissor);
-
-  vkCmdBindPipeline(command_buffer->handle, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    ctx->shadow_shader.pipeline.handle);
-
-  VkDescriptorSet bone_set = vkrenderer_skin_descriptor(ctx);
-  vkCmdBindDescriptorSets(command_buffer->handle, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          ctx->shadow_shader.pipeline.layout, 0, 1, &bone_set, 0, 0);
-
   EgnScene *scene = egn_scene_get();
-  if (scene && scene->root)
-    render_shadows_recursive(ctx, command_buffer, scene->root, lighting);
+  VkDescriptorSet bone_set = vkrenderer_skin_descriptor(ctx);
 
-  vkCmdEndRenderPass(command_buffer->handle);
+  for (u32 cascade = 0; cascade < cascade_count; cascade++)
+  {
+    VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    begin_info.renderPass = vkrenderer_lighting_shadow_renderpass(ctx);
+    begin_info.framebuffer = vkrenderer_lighting_shadow_framebuffer(ctx, cascade);
+    begin_info.renderArea.offset.x = 0;
+    begin_info.renderArea.offset.y = 0;
+    begin_info.renderArea.extent.width = size;
+    begin_info.renderArea.extent.height = size;
+    begin_info.clearValueCount = 1;
+    begin_info.pClearValues = &clear_value;
 
-  VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-  barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  barrier.image = ctx->shadow_image.handle;
-  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-  barrier.subresourceRange.baseMipLevel = 0;
-  barrier.subresourceRange.levelCount = 1;
-  barrier.subresourceRange.baseArrayLayer = 0;
-  barrier.subresourceRange.layerCount = 1;
-  barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdBeginRenderPass(command_buffer->handle, &begin_info, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdSetViewport(command_buffer->handle, 0, 1, &viewport);
+    vkCmdSetScissor(command_buffer->handle, 0, 1, &scissor);
+    vkCmdBindPipeline(command_buffer->handle, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      ctx->shadow_shader.pipeline.handle);
+    vkCmdBindDescriptorSets(command_buffer->handle, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            ctx->shadow_shader.pipeline.layout, 0, 1, &bone_set, 0, 0);
 
-  vkCmdPipelineBarrier(command_buffer->handle,
-                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                       0, 0, 0, 0, 0, 1, &barrier);
+    if (scene && scene->root)
+      render_shadows_recursive(ctx, command_buffer, scene->root,
+                               lighting->sun_view_projection[cascade]);
+
+    vkCmdEndRenderPass(command_buffer->handle);
+
+    VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = ctx->shadow_images[cascade].handle;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(command_buffer->handle,
+                         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, 0, 0, 0, 1, &barrier);
+  }
 }
 
 void vkrenderer_scene_shutdown(VkContext *ctx)
@@ -959,6 +985,158 @@ static b8 camera_viewport_pixels(const EgnCameraData *camera, u32 framebuffer_wi
   *out_width = pixel_width;
   *out_height = pixel_height;
   return true;
+}
+
+static b8 primary_camera_shadow_info(VkContext *ctx, mat4 *out_view, f32 *out_fov,
+                                     f32 *out_aspect, f32 *out_near, f32 *out_far,
+                                     vec3 *out_position)
+{
+  EgnScene *scene = egn_scene_get();
+  if (!scene || !scene->root)
+    return false;
+
+  SceneCameraInfo cameras[VKRENDERER_MAX_CAMERAS];
+  MEMOZERO(cameras, sizeof(cameras));
+  u32 camera_count = 0;
+  u32 sequence = 0;
+  collect_cameras(scene->root, cameras, &camera_count, &sequence);
+  sort_cameras(cameras, camera_count);
+
+  for (u32 i = 0; i < camera_count; i++)
+  {
+    SceneCameraInfo *camera = &cameras[i];
+    if (!camera->camera || camera->domain != EGN_RENDER_3D ||
+        camera->camera->projection != EGN_PROJECTION_PERSPECTIVE)
+      continue;
+
+    u32 x, y, width, height;
+    if (!camera_viewport_pixels(camera->camera, ctx->framebuffer_width,
+                                ctx->framebuffer_height, &x, &y, &width, &height))
+      continue;
+
+    *out_view = camera_view_matrix(camera->object);
+    *out_fov = deg_to_rad(camera->camera->fov_degrees);
+    *out_aspect = (f32)width / (f32)height;
+    *out_near = camera->camera->near_clip;
+    *out_far = camera->camera->far_clip;
+    *out_position = egn_object_get_world_position(camera->object);
+    return true;
+  }
+
+  return false;
+}
+
+static void compute_shadow_cascades(const RendererGraphicsSettings *settings,
+                                    mat4 view, f32 fov, f32 aspect, f32 camera_near,
+                                    f32 camera_far, vec3 camera_position, vec3 sun_direction,
+                                    VkRendererLighting *lighting)
+{
+  if (!settings || !lighting)
+    return;
+
+  u32 cascade_count = renderer_graphics_settings_cascades(settings);
+  if (cascade_count < 1)
+    cascade_count = 1;
+  if (cascade_count > VKRENDERER_MAX_SHADOW_CASCADES)
+    cascade_count = VKRENDERER_MAX_SHADOW_CASCADES;
+
+  f32 near_clip = camera_near > 0.05f ? camera_near : 0.05f;
+  f32 far_clip = camera_far;
+  if (settings->shadow_distance > near_clip && settings->shadow_distance < far_clip)
+    far_clip = settings->shadow_distance;
+  if (far_clip <= near_clip + 0.1f)
+    far_clip = near_clip + 0.1f;
+
+  f32 splits[VKRENDERER_MAX_SHADOW_CASCADES];
+  const f32 lambda = 0.65f;
+  for (u32 i = 0; i < cascade_count; i++)
+  {
+    f32 p = (f32)(i + 1) / (f32)cascade_count;
+    f32 logarithmic = near_clip * powf(far_clip / near_clip, p);
+    f32 linear = near_clip + (far_clip - near_clip) * p;
+    splits[i] = lambda * logarithmic + (1.0f - lambda) * linear;
+    if (splits[i] > far_clip)
+      splits[i] = far_clip;
+  }
+
+  sun_direction = vec3_normalized(sun_direction);
+
+  for (u32 cascade = 0; cascade < cascade_count; cascade++)
+  {
+    f32 cascade_near = cascade == 0 ? near_clip : splits[cascade - 1];
+    f32 cascade_far = splits[cascade];
+
+    mat4 cascade_projection = mat4_perspective(fov, aspect, cascade_near, cascade_far);
+    mat4 inverse_view_projection = mat4_inverse(mat4_mul(cascade_projection, view));
+
+    vec3 corners[8];
+    u32 corner_index = 0;
+    for (u32 z = 0; z < 2; z++)
+    {
+      for (u32 y = 0; y < 2; y++)
+      {
+        for (u32 x = 0; x < 2; x++)
+        {
+          vec4 ndc = vec4_create(x ? 1.0f : -1.0f, y ? 1.0f : -1.0f,
+                                 z ? 1.0f : 0.0f, 1.0f);
+          vec4 world;
+          world.x = inverse_view_projection.data[0] * ndc.x +
+                    inverse_view_projection.data[4] * ndc.y +
+                    inverse_view_projection.data[8] * ndc.z +
+                    inverse_view_projection.data[12];
+          world.y = inverse_view_projection.data[1] * ndc.x +
+                    inverse_view_projection.data[5] * ndc.y +
+                    inverse_view_projection.data[9] * ndc.z +
+                    inverse_view_projection.data[13];
+          world.z = inverse_view_projection.data[2] * ndc.x +
+                    inverse_view_projection.data[6] * ndc.y +
+                    inverse_view_projection.data[10] * ndc.z +
+                    inverse_view_projection.data[14];
+          world.w = inverse_view_projection.data[3] * ndc.x +
+                    inverse_view_projection.data[7] * ndc.y +
+                    inverse_view_projection.data[11] * ndc.z +
+                    inverse_view_projection.data[15];
+          f32 inv_w = world.w != 0.0f ? 1.0f / world.w : 1.0f;
+          corners[corner_index++] = vec3_create(world.x * inv_w, world.y * inv_w, world.z * inv_w);
+        }
+      }
+    }
+
+    vec3 center = vec3_zero();
+    for (u32 i = 0; i < 8; i++)
+      center = vec3_add(center, corners[i]);
+    center = vec3_mul_scalar(center, 1.0f / 8.0f);
+
+    f32 radius = 0.0f;
+    for (u32 i = 0; i < 8; i++)
+    {
+      f32 distance = vec3_length(vec3_sub(corners[i], center));
+      if (distance > radius)
+        radius = distance;
+    }
+    radius *= 1.08f;
+    if (radius < 0.5f)
+      radius = 0.5f;
+
+    vec3 up = vec3_up();
+    if (egnabs(vec3_dot(sun_direction, up)) > 0.99f)
+      up = vec3_back();
+
+    vec3 light_position = vec3_add(center, vec3_mul_scalar(sun_direction, radius + 10.0f));
+    mat4 light_view = mat4_look_at(light_position, center, up);
+    f32 depth_range = radius * 2.0f + 20.0f;
+    mat4 light_projection = mat4_orthographic(-radius, radius, -radius, radius,
+                                              0.1f, depth_range);
+    lighting->sun_view_projection[cascade] = mat4_mul(light_projection, light_view);
+  }
+
+  lighting->cascade_splits = vec4_create(
+      splits[0],
+      cascade_count > 1 ? splits[1] : splits[0],
+      cascade_count > 2 ? splits[2] : splits[cascade_count - 1],
+      cascade_count > 3 ? splits[3] : splits[cascade_count - 1]);
+  lighting->shadow_params.z = (f32)cascade_count;
+  (void)camera_position;
 }
 
 static void clear_camera_area(VkRendererCommandBuffer *command_buffer,

@@ -241,10 +241,12 @@ typedef struct VkContext {
   void *lighting_mapped[VKRENDERER_BONE_FRAMES];
   VkDescriptorSet lighting_sets[VKRENDERER_BONE_FRAMES];
 
-  VkRendererImage shadow_image;
+  VkRendererImage shadow_images[4];
   VkSampler shadow_sampler;
   VkRenderPass shadow_renderpass;
-  VkFramebuffer shadow_framebuffer;
+  VkFramebuffer shadow_framebuffers[4];
+  u32 shadow_size;
+  u32 shadow_cascade_count;
 
   VkRendererShader shader_3d;
   VkRendererShader shader_sprite;

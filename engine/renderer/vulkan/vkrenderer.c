@@ -14,6 +14,7 @@
 #include "vkrenderer_scene.h"
 #include "vkrenderer_skin.h"
 #include "vkrenderer_lighting.h"
+#include "vkrenderer_post.h"
 #include "vkrenderer_particles.h"
 #include "vkrenderer_mesh.h"
 #include "vkrenderer_texture.h"
@@ -72,6 +73,7 @@ RendererGraphicsSettings renderer_get_graphics_settings(void)
   if (!graphics_settings_initialized)
   {
     graphics_settings = renderer_graphics_settings_default();
+    active_graphics_settings = graphics_settings;
     graphics_settings_initialized = true;
   }
   return graphics_settings;
@@ -80,7 +82,7 @@ RendererGraphicsSettings renderer_get_graphics_settings(void)
 RendererGraphicsSettings renderer_get_active_graphics_settings(void)
 {
   if (!graphics_settings_initialized)
-    return renderer_get_graphics_settings();
+    renderer_get_graphics_settings();
   return active_graphics_settings;
 }
 
@@ -110,6 +112,9 @@ static void apply_graphics_settings()
   vkDeviceWaitIdle(ctx.device.handle);
   active_graphics_settings = graphics_settings;
   graphics_settings_dirty = false;
+
+  vkrenderer_post_apply_settings(&ctx);
+  vkrenderer_lighting_apply_settings(&ctx);
 }
 
 VkContext *vkrenderer_get_context(void)
@@ -172,7 +177,8 @@ static b8 create_render_pipelines(void)
   params_3d.blending = true;
   params_3d.cull_mode = VK_CULL_MODE_NONE;
   params_3d.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-  params_3d.color_attachment_count = 1;
+  params_3d.render_pass = vkrenderer_post_scene_renderpass(&ctx);
+  params_3d.color_attachment_count = 2;
 
   if (!vkrenderer_shader_create(&ctx, &params_3d, &ctx.shader_3d))
     return false;
@@ -189,7 +195,8 @@ static b8 create_render_pipelines(void)
   params_sprite.blending = true;
   params_sprite.cull_mode = VK_CULL_MODE_NONE;
   params_sprite.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-  params_sprite.color_attachment_count = 1;
+  params_sprite.render_pass = vkrenderer_post_scene_renderpass(&ctx);
+  params_sprite.color_attachment_count = 2;
 
   if (!vkrenderer_shader_create(&ctx, &params_sprite, &ctx.shader_sprite))
     return false;
@@ -251,6 +258,9 @@ b8 renderer_initialize(Window *win, u32 width, u32 height, b8 vsync)
     return false;
 
   if (!vkrenderer_lighting_create(&ctx))
+    return false;
+
+  if (!vkrenderer_post_create(&ctx))
     return false;
 
   if (ctx.device.properties.limits.maxPushConstantsSize < 148)
@@ -323,6 +333,7 @@ void renderer_shutdown()
   vkrenderer_shader_destroy(&ctx, &ctx.shadow_shader);
 
   vkrenderer_particles_destroy(&ctx);
+  vkrenderer_post_destroy(&ctx);
   vkrenderer_lighting_destroy(&ctx);
   vkrenderer_skin_destroy(&ctx);
   vkrenderer_descriptors_destroy(&ctx);
@@ -369,10 +380,11 @@ b8 renderer_draw_frame(RenderPacket packet)
   if (vkrenderer_scene_prepare(&ctx, command_buffer, packet.delta_time))
     vkrenderer_scene_render_shadows(&ctx, command_buffer);
 
-  vkrenderer_renderpass_begin(command_buffer, &ctx.main_renderpass,
-                              ctx.framebuffers[ctx.image_index].handle);
-
+  vkrenderer_post_begin_scene(&ctx, command_buffer);
   vkrenderer_scene_render(&ctx, command_buffer);
+  vkrenderer_post_end_scene(&ctx, command_buffer);
+
+  vkrenderer_post_process(&ctx, command_buffer);
 
   if (!end_frame())
     return false;
@@ -750,6 +762,7 @@ b8 handle_recreate_swapchain()
   create_command_buffers();
   create_framebuffers();
   create_sync_objects();
+  vkrenderer_post_resize(&ctx);
 
   ctx.current_frame = 0;
   ctx.framebuffer_generation = next_framebuffer_generation;

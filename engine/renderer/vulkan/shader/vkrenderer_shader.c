@@ -99,23 +99,28 @@ b8 vkrenderer_shader_create(VkContext *ctx, const VkRendererShaderParams *params
   depth_stencil.depthBoundsTestEnable = VK_FALSE;
   depth_stencil.stencilTestEnable = VK_FALSE;
 
-  VkPipelineColorBlendAttachmentState color_attachment = {0};
-  color_attachment.blendEnable = params->blending ? VK_TRUE : VK_FALSE;
-  color_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-  color_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-  color_attachment.colorBlendOp = VK_BLEND_OP_ADD;
-  color_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-  color_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-  color_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
-  color_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-                                    VK_COLOR_COMPONENT_G_BIT |
-                                    VK_COLOR_COMPONENT_B_BIT |
-                                    VK_COLOR_COMPONENT_A_BIT;
+  VkPipelineColorBlendAttachmentState color_attachments[2];
+  MEMOZERO(color_attachments, sizeof(color_attachments));
+
+  for (u32 i = 0; i < params->color_attachment_count && i < 2; i++)
+  {
+    color_attachments[i].blendEnable = params->blending ? VK_TRUE : VK_FALSE;
+    color_attachments[i].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    color_attachments[i].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    color_attachments[i].colorBlendOp = VK_BLEND_OP_ADD;
+    color_attachments[i].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    color_attachments[i].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    color_attachments[i].alphaBlendOp = VK_BLEND_OP_ADD;
+    color_attachments[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+                                          VK_COLOR_COMPONENT_G_BIT |
+                                          VK_COLOR_COMPONENT_B_BIT |
+                                          VK_COLOR_COMPONENT_A_BIT;
+  }
 
   VkPipelineColorBlendStateCreateInfo color_blending = {VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
   color_blending.logicOpEnable = VK_FALSE;
-  color_blending.attachmentCount = params->color_attachment_count;
-  color_blending.pAttachments = params->color_attachment_count > 0 ? &color_attachment : 0;
+  color_blending.attachmentCount = params->color_attachment_count > 2 ? 2 : params->color_attachment_count;
+  color_blending.pAttachments = params->color_attachment_count > 0 ? color_attachments : 0;
 
   VkDynamicState dynamic_states[2] = {
       VK_DYNAMIC_STATE_VIEWPORT,

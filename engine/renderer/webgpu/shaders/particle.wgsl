@@ -28,13 +28,18 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   return output;
 }
 
+struct FragmentOutput {
+  @location(0) colour: vec4f,
+  @location(1) normal: vec4f,
+};
+
 @fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+fn fs_main(input: VertexOutput) -> FragmentOutput {
   // Use the sprite as an alpha mask and keep the emitter colour saturated.
   let mask = textureSample(particleTexture, particleSampler, input.uv).a;
   let alpha = input.color.a * mask;
   if (alpha < 0.001) {
     discard;
   }
-  return vec4f(input.color.rgb, alpha);
+  return FragmentOutput(vec4f(input.color.rgb, alpha), vec4f(0.0));
 }

@@ -2,30 +2,96 @@
 #include "vkrenderer_buffer.h"
 #include "vkrenderer_image.h"
 #include "vkrenderer_command_buffer.h"
+#include "renderer/renderer.h"
+#include "renderer/renderer_settings.h"
 #include "core/logger.h"
 #include "core/memo.h"
 
 static VkRendererLighting current_lighting;
 
-typedef char VkRendererLighting_size_check[(sizeof(VkRendererLighting) == 384) ? 1 : -1];
+typedef char VkRendererLighting_size_check[(sizeof(VkRendererLighting) == 624) ? 1 : -1];
 
 static u32 lighting_frame_index(VkContext *ctx)
 {
   return ctx->current_frame % VKRENDERER_BONE_FRAMES;
 }
 
+static void transition_shadow_image(VkContext *ctx, VkRendererImage *image)
+{
+  VkRendererCommandBuffer command_buffer = {0};
+  vkrenderer_command_buffer_allocate_and_begin_single_use(ctx, ctx->device.graphics_command_pool,
+                                                         &command_buffer);
+
+  VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.image = image->handle;
+  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+  barrier.subresourceRange.baseMipLevel = 0;
+  barrier.subresourceRange.levelCount = 1;
+  barrier.subresourceRange.baseArrayLayer = 0;
+  barrier.subresourceRange.layerCount = 1;
+  barrier.srcAccessMask = 0;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(command_buffer.handle,
+                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                       0, 0, 0, 0, 0, 1, &barrier);
+
+  vkrenderer_command_buffer_end_single_use(ctx, ctx->device.graphics_command_pool,
+                                           &command_buffer, ctx->device.graphics);
+}
+
+static void destroy_shadow_images(VkContext *ctx)
+{
+  for (u32 cascade = 0; cascade < VKRENDERER_MAX_SHADOW_CASCADES; cascade++)
+  {
+    if (ctx->shadow_framebuffers[cascade])
+    {
+      vkDestroyFramebuffer(ctx->device.handle, ctx->shadow_framebuffers[cascade], ctx->allocator);
+      ctx->shadow_framebuffers[cascade] = 0;
+    }
+    vkrenderer_destroy_image(ctx, &ctx->shadow_images[cascade]);
+  }
+}
+
+static b8 create_shadow_images(VkContext *ctx, u32 size)
+{
+  for (u32 cascade = 0; cascade < VKRENDERER_MAX_SHADOW_CASCADES; cascade++)
+  {
+    vkrenderer_image_create(ctx, VK_IMAGE_TYPE_2D, size, size, VK_FORMAT_D32_SFLOAT,
+                            VK_IMAGE_TILING_OPTIMAL,
+                            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                VK_IMAGE_USAGE_SAMPLED_BIT,
+                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                            true, VK_IMAGE_ASPECT_DEPTH_BIT,
+                            &ctx->shadow_images[cascade]);
+    if (!ctx->shadow_images[cascade].handle || !ctx->shadow_images[cascade].view)
+      return false;
+
+    VkFramebufferCreateInfo framebuffer_info = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    framebuffer_info.renderPass = ctx->shadow_renderpass;
+    framebuffer_info.attachmentCount = 1;
+    framebuffer_info.pAttachments = &ctx->shadow_images[cascade].view;
+    framebuffer_info.width = size;
+    framebuffer_info.height = size;
+    framebuffer_info.layers = 1;
+    VKCHECK(vkCreateFramebuffer(ctx->device.handle, &framebuffer_info, ctx->allocator,
+                                &ctx->shadow_framebuffers[cascade]))
+
+    // The shadow map is sampled by the main pass even when no caster is
+    // active, so move it to the shader-read layout once at creation.
+    transition_shadow_image(ctx, &ctx->shadow_images[cascade]);
+  }
+  return true;
+}
+
 static b8 create_shadow_resources(VkContext *ctx)
 {
-  vkrenderer_image_create(ctx, VK_IMAGE_TYPE_2D, VKRENDERER_SHADOW_SIZE,
-                          VKRENDERER_SHADOW_SIZE, VK_FORMAT_D32_SFLOAT,
-                          VK_IMAGE_TILING_OPTIMAL,
-                          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                              VK_IMAGE_USAGE_SAMPLED_BIT,
-                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                          true, VK_IMAGE_ASPECT_DEPTH_BIT,
-                          &ctx->shadow_image);
-  if (!ctx->shadow_image.handle || !ctx->shadow_image.view)
-    return false;
+  RendererGraphicsSettings settings = renderer_get_active_graphics_settings();
+  u32 size = renderer_graphics_settings_shadow_size(&settings);
 
   VkSamplerCreateInfo sampler_info = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
   sampler_info.magFilter = VK_FILTER_LINEAR;
@@ -79,44 +145,55 @@ static b8 create_shadow_resources(VkContext *ctx)
   VKCHECK(vkCreateRenderPass(ctx->device.handle, &renderpass_info, ctx->allocator,
                              &ctx->shadow_renderpass))
 
-  VkFramebufferCreateInfo framebuffer_info = {VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-  framebuffer_info.renderPass = ctx->shadow_renderpass;
-  framebuffer_info.attachmentCount = 1;
-  framebuffer_info.pAttachments = &ctx->shadow_image.view;
-  framebuffer_info.width = VKRENDERER_SHADOW_SIZE;
-  framebuffer_info.height = VKRENDERER_SHADOW_SIZE;
-  framebuffer_info.layers = 1;
-  VKCHECK(vkCreateFramebuffer(ctx->device.handle, &framebuffer_info, ctx->allocator,
-                              &ctx->shadow_framebuffer))
+  ctx->shadow_size = size;
+  if (!create_shadow_images(ctx, size))
+    return false;
 
-  // The shadow map is sampled by the lighting pass even when no shadow caster
-  // is active, so move it to the shader-read layout once at creation.
-  VkRendererCommandBuffer command_buffer = {0};
-  vkrenderer_command_buffer_allocate_and_begin_single_use(ctx, ctx->device.graphics_command_pool,
-                                                         &command_buffer);
-
-  VkImageMemoryBarrier barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-  barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  barrier.image = ctx->shadow_image.handle;
-  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-  barrier.subresourceRange.baseMipLevel = 0;
-  barrier.subresourceRange.levelCount = 1;
-  barrier.subresourceRange.baseArrayLayer = 0;
-  barrier.subresourceRange.layerCount = 1;
-  barrier.srcAccessMask = 0;
-  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-  vkCmdPipelineBarrier(command_buffer.handle,
-                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                       0, 0, 0, 0, 0, 1, &barrier);
-
-  vkrenderer_command_buffer_end_single_use(ctx, ctx->device.graphics_command_pool,
-                                           &command_buffer, ctx->device.graphics);
-
+  ctx->shadow_cascade_count = renderer_graphics_settings_cascades(&settings);
   return true;
+}
+
+static void write_lighting_descriptors(VkContext *ctx)
+{
+  for (u32 frame = 0; frame < VKRENDERER_BONE_FRAMES; frame++)
+  {
+    VkDescriptorBufferInfo buffer_descriptor = {0};
+    buffer_descriptor.buffer = ctx->lighting_buffers[frame];
+    buffer_descriptor.offset = 0;
+    buffer_descriptor.range = sizeof(VkRendererLighting);
+
+    VkDescriptorImageInfo image_descriptors[VKRENDERER_MAX_SHADOW_CASCADES];
+    MEMOZERO(image_descriptors, sizeof(image_descriptors));
+    for (u32 cascade = 0; cascade < VKRENDERER_MAX_SHADOW_CASCADES; cascade++)
+    {
+      image_descriptors[cascade].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      image_descriptors[cascade].imageView = ctx->shadow_images[cascade].view;
+      image_descriptors[cascade].sampler = ctx->shadow_sampler;
+    }
+
+    VkWriteDescriptorSet writes[1 + VKRENDERER_MAX_SHADOW_CASCADES];
+    MEMOZERO(writes, sizeof(writes));
+
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = ctx->lighting_sets[frame];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[0].pBufferInfo = &buffer_descriptor;
+
+    for (u32 cascade = 0; cascade < VKRENDERER_MAX_SHADOW_CASCADES; cascade++)
+    {
+      writes[1 + cascade].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      writes[1 + cascade].dstSet = ctx->lighting_sets[frame];
+      writes[1 + cascade].dstBinding = 1 + cascade;
+      writes[1 + cascade].descriptorCount = 1;
+      writes[1 + cascade].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      writes[1 + cascade].pImageInfo = &image_descriptors[cascade];
+    }
+
+    vkUpdateDescriptorSets(ctx->device.handle, 1 + VKRENDERER_MAX_SHADOW_CASCADES,
+                           writes, 0, 0);
+  }
 }
 
 b8 vkrenderer_lighting_create(VkContext *ctx)
@@ -126,19 +203,24 @@ b8 vkrenderer_lighting_create(VkContext *ctx)
   if (!create_shadow_resources(ctx))
     return false;
 
-  VkDescriptorSetLayoutBinding bindings[2] = {0};
+  VkDescriptorSetLayoutBinding bindings[1 + VKRENDERER_MAX_SHADOW_CASCADES];
+  MEMOZERO(bindings, sizeof(bindings));
+
   bindings[0].binding = 0;
   bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   bindings[0].descriptorCount = 1;
   bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
-  bindings[1].binding = 1;
-  bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  bindings[1].descriptorCount = 1;
-  bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  for (u32 cascade = 0; cascade < VKRENDERER_MAX_SHADOW_CASCADES; cascade++)
+  {
+    bindings[1 + cascade].binding = 1 + cascade;
+    bindings[1 + cascade].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1 + cascade].descriptorCount = 1;
+    bindings[1 + cascade].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  }
 
   VkDescriptorSetLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  layout_info.bindingCount = 2;
+  layout_info.bindingCount = 1 + VKRENDERER_MAX_SHADOW_CASCADES;
   layout_info.pBindings = bindings;
   VKCHECK(vkCreateDescriptorSetLayout(ctx->device.handle, &layout_info, ctx->allocator,
                                       &ctx->lighting_set_layout))
@@ -147,7 +229,7 @@ b8 vkrenderer_lighting_create(VkContext *ctx)
   pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   pool_sizes[0].descriptorCount = VKRENDERER_BONE_FRAMES;
   pool_sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  pool_sizes[1].descriptorCount = VKRENDERER_BONE_FRAMES;
+  pool_sizes[1].descriptorCount = VKRENDERER_BONE_FRAMES * VKRENDERER_MAX_SHADOW_CASCADES;
 
   VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   pool_info.maxSets = VKRENDERER_BONE_FRAMES;
@@ -181,36 +263,34 @@ b8 vkrenderer_lighting_create(VkContext *ctx)
     allocate_info.pSetLayouts = &ctx->lighting_set_layout;
     VKCHECK(vkAllocateDescriptorSets(ctx->device.handle, &allocate_info,
                                      &ctx->lighting_sets[frame]))
-
-    VkDescriptorBufferInfo buffer_descriptor = {0};
-    buffer_descriptor.buffer = ctx->lighting_buffers[frame];
-    buffer_descriptor.offset = 0;
-    buffer_descriptor.range = sizeof(VkRendererLighting);
-
-    VkDescriptorImageInfo image_descriptor = {0};
-    image_descriptor.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    image_descriptor.imageView = ctx->shadow_image.view;
-    image_descriptor.sampler = ctx->shadow_sampler;
-
-    VkWriteDescriptorSet writes[2] = {0};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = ctx->lighting_sets[frame];
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[0].pBufferInfo = &buffer_descriptor;
-
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = ctx->lighting_sets[frame];
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[1].pImageInfo = &image_descriptor;
-
-    vkUpdateDescriptorSets(ctx->device.handle, 2, writes, 0, 0);
   }
 
+  write_lighting_descriptors(ctx);
   return true;
+}
+
+void vkrenderer_lighting_apply_settings(VkContext *ctx)
+{
+  if (!ctx || !ctx->shadow_renderpass)
+    return;
+
+  RendererGraphicsSettings settings = renderer_get_active_graphics_settings();
+  u32 size = renderer_graphics_settings_shadow_size(&settings);
+  ctx->shadow_cascade_count = renderer_graphics_settings_cascades(&settings);
+
+  if (size == ctx->shadow_size)
+    return;
+
+  // Recreate images/framebuffers at the new resolution while keeping the
+  // sampler, render pass, UBOs and descriptor sets alive.
+  destroy_shadow_images(ctx);
+  ctx->shadow_size = size;
+  if (!create_shadow_images(ctx, size))
+  {
+    EGNERROR("VKRENDERER failed to recreate shadow resources");
+    return;
+  }
+  write_lighting_descriptors(ctx);
 }
 
 void vkrenderer_lighting_destroy(VkContext *ctx)
@@ -239,11 +319,7 @@ void vkrenderer_lighting_destroy(VkContext *ctx)
     ctx->lighting_set_layout = 0;
   }
 
-  if (ctx->shadow_framebuffer)
-  {
-    vkDestroyFramebuffer(ctx->device.handle, ctx->shadow_framebuffer, ctx->allocator);
-    ctx->shadow_framebuffer = 0;
-  }
+  destroy_shadow_images(ctx);
 
   if (ctx->shadow_renderpass)
   {
@@ -257,17 +333,17 @@ void vkrenderer_lighting_destroy(VkContext *ctx)
     ctx->shadow_sampler = 0;
   }
 
-  vkrenderer_destroy_image(ctx, &ctx->shadow_image);
+  ctx->shadow_size = 0;
 }
 
 void vkrenderer_lighting_write(VkContext *ctx, const VkRendererLighting *lighting)
 {
   if (!ctx || !lighting)
     return;
-
-  current_lighting = *lighting;
   u32 frame = lighting_frame_index(ctx);
-  MEMOCPY(ctx->lighting_mapped[frame], lighting, sizeof(VkRendererLighting));
+  if (ctx->lighting_mapped[frame])
+    MEMOCPY(ctx->lighting_mapped[frame], lighting, sizeof(VkRendererLighting));
+  current_lighting = *lighting;
 }
 
 const VkRendererLighting *vkrenderer_lighting_current(void)
@@ -290,13 +366,14 @@ VkRenderPass vkrenderer_lighting_shadow_renderpass(VkContext *ctx)
   return ctx->shadow_renderpass;
 }
 
-VkFramebuffer vkrenderer_lighting_shadow_framebuffer(VkContext *ctx)
+VkFramebuffer vkrenderer_lighting_shadow_framebuffer(VkContext *ctx, u32 cascade)
 {
-  return ctx->shadow_framebuffer;
+  if (cascade >= VKRENDERER_MAX_SHADOW_CASCADES)
+    cascade = VKRENDERER_MAX_SHADOW_CASCADES - 1;
+  return ctx->shadow_framebuffers[cascade];
 }
 
 u32 vkrenderer_lighting_shadow_size(VkContext *ctx)
 {
-  (void)ctx;
-  return VKRENDERER_SHADOW_SIZE;
+  return ctx->shadow_size;
 }

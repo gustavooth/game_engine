@@ -13,7 +13,9 @@ struct Globals {
   cameraPosition: vec4f,
   ambient: vec4f,
   sun: Sun,
-  shadowViewProjection: mat4x4f,
+  shadowViewProjection: array<mat4x4f, 4>,
+  cascadeSplits: vec4f,
+  shadowParams: vec4f,
   pointParams: vec4f,
   pointLights: array<PointLight, 8>,
 };
@@ -29,7 +31,7 @@ struct ObjectUniforms {
 @group(1) @binding(0) var<uniform> object: ObjectUniforms;
 @group(2) @binding(0) var texture0: texture_2d<f32>;
 @group(2) @binding(1) var sampler0: sampler;
-@group(0) @binding(1) var shadowMap: texture_depth_2d;
+@group(0) @binding(1) var shadowMap: texture_depth_2d_array;
 @group(0) @binding(2) var shadowSampler: sampler_comparison;
 
 fn pbrLight(base: vec3f, metallic: f32, roughness: f32, n: vec3f, v: vec3f, l: vec3f) -> vec3f {
@@ -62,7 +64,6 @@ struct VertexOutput {
   @location(0) normal: vec3f,
   @location(1) uv: vec2f,
   @location(2) worldPosition: vec3f,
-  @location(3) shadowPosition: vec4f,
 };
 
 @vertex
@@ -73,12 +74,16 @@ fn vs_main(input: VertexInput) -> VertexOutput {
   output.normal = (transpose(object.inverseModel) * vec4f(input.normal, 0.0)).xyz;
   output.uv = input.uv;
   output.worldPosition = worldPosition.xyz;
-  output.shadowPosition = globals.shadowViewProjection * worldPosition;
   return output;
 }
 
+struct FragmentOutput {
+  @location(0) colour: vec4f,
+  @location(1) normal: vec4f,
+};
+
 @fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4f {
+fn fs_main(input: VertexOutput) -> FragmentOutput {
   let texel = textureSample(texture0, sampler0, input.uv);
   let base = texel * object.color;
 
@@ -86,25 +91,38 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   let sunDirection = normalize(globals.sun.direction.xyz);
   let sunNdl = max(dot(normal, sunDirection), 0.0);
 
-  // Keep textureSampleCompare in uniform control flow: compute the filtered
-  // visibility for every fragment and apply it only where shadows are enabled.
-  let projected = input.shadowPosition.xyz / max(input.shadowPosition.w, 0.0001);
+  // Keep textureSampleCompare in uniform control flow: the cascade layer is
+  // part of the coordinate, not a branch around the sampling instruction.
+  let viewDistance = length(input.worldPosition - globals.cameraPosition.xyz);
+  var cascade = 0;
+  let cascadeCount = i32(globals.shadowParams.y + 0.5);
+  for (var i = 1; i < 4; i = i + 1) {
+    if (i < cascadeCount && viewDistance > globals.cascadeSplits[i - 1]) {
+      cascade = i;
+    }
+  }
+  let shadowPosition = globals.shadowViewProjection[cascade] *
+      vec4f(input.worldPosition, 1.0);
+  let projected = shadowPosition.xyz / max(shadowPosition.w, 0.0001);
   let shadowUv = clamp(projected.xy * vec2f(0.5, -0.5) + vec2f(0.5), vec2f(0.0), vec2f(1.0));
-  let shadowDepth = clamp(projected.z - 0.0015, 0.0, 1.0);
-  let texelSize = globals.pointParams.z;
+  let texelSize = globals.shadowParams.z;
+  let bias = 0.0008 + 0.0006 * f32(cascade);
+  let radius = i32(max(1, i32(globals.shadowParams.w * 1.5 + 0.5)));
   var shadowSum = 0.0;
-  let radius = i32(globals.pointParams.w);
   for (var y = -radius; y <= radius; y = y + 1) {
     for (var x = -radius; x <= radius; x = x + 1) {
       let offset = vec2f(f32(x), f32(y)) * texelSize;
-      shadowSum += textureSampleCompare(shadowMap, shadowSampler, shadowUv + offset, shadowDepth);
+      shadowSum += textureSampleCompare(shadowMap, shadowSampler,
+          shadowUv + offset, cascade,
+          clamp(projected.z - bias, 0.0, 1.0), vec2i(0));
     }
   }
 
   let inShadowRange = projected.z >= 0.0 && projected.z <= 1.0 &&
       projected.xy.x >= -1.0 && projected.xy.x <= 1.0 &&
       projected.xy.y >= -1.0 && projected.xy.y <= 1.0;
-  let shadowsEnabled = globals.pointParams.y > 0.5 && sunNdl > 0.0 && inShadowRange;
+  let shadowsEnabled = globals.shadowParams.x > 0.5 && sunNdl > 0.0 &&
+      inShadowRange && cascade < cascadeCount;
   var shadow = 1.0;
   if (shadowsEnabled) {
     let samples = f32((radius * 2 + 1) * (radius * 2 + 1));
@@ -139,5 +157,5 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
     color += pbrLight(base.rgb, metallic, roughness, normal, viewDirection, direction) * light.color.rgb * light.color.w * attenuation;
   }
 
-  return vec4f(color, base.a);
+  return FragmentOutput(vec4f(color, base.a), vec4f(normal, 1.0));
 }

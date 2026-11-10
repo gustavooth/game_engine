@@ -1,4 +1,5 @@
 #include "vkrenderer_particles.h"
+#include "vkrenderer_post.h"
 #include "vkrenderer_buffer.h"
 #include "shader/vkrenderer_shader.h"
 #include "shader/vkrenderer_shader_utils.h"
@@ -144,7 +145,8 @@ static b8 create_graphics_pipeline(VkContext *ctx)
   params.blending = true;
   params.cull_mode = VK_CULL_MODE_NONE;
   params.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-  params.color_attachment_count = 1;
+  params.render_pass = vkrenderer_post_scene_renderpass(ctx);
+  params.color_attachment_count = 2;
   return vkrenderer_shader_create(ctx, &params, &ctx->particle_shader);
 }
 

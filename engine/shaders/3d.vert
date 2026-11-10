@@ -1,7 +1,5 @@
 #version 450
 
-#define MAX_POINT_LIGHTS 8
-
 layout(location = 0) in vec3 in_position;
 layout(location = 1) in vec3 in_normal;
 layout(location = 2) in vec2 in_uv;
@@ -12,22 +10,6 @@ layout(set = 1, binding = 0) readonly buffer BoneBuffer
 {
   mat4 bones[];
 } bone_buffer;
-
-struct PointLight
-{
-  vec4 position;
-  vec4 colour;
-};
-
-layout(set = 2, binding = 0) uniform LightingBlock
-{
-  vec4 ambient;
-  vec4 sun_direction;
-  vec4 sun_colour;
-  mat4 sun_view_projection;
-  vec4 point_count;
-  PointLight point_lights[MAX_POINT_LIGHTS];
-} lighting;
 
 layout(push_constant) uniform PushConstants
 {
@@ -41,7 +23,6 @@ layout(location = 0) out vec3 v_normal;
 layout(location = 1) out vec2 v_uv;
 layout(location = 2) out vec4 v_tint;
 layout(location = 3) out vec3 v_world_position;
-layout(location = 4) out vec4 v_shadow_position;
 
 void main()
 {
@@ -62,5 +43,4 @@ void main()
   v_uv = in_uv;
   v_tint = pc.tint;
   v_world_position = world_position.xyz;
-  v_shadow_position = lighting.sun_view_projection * world_position;
 }

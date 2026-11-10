@@ -12,9 +12,32 @@ const COMPONENT_LIGHT = 4;
 const COMPONENT_PARTICLES = 7;
 const LIGHT_DIRECTIONAL = 0;
 const LIGHT_POINT = 1;
-const SHADOW_SIZE = 2048;
-const GLOBALS_FLOATS = 116;
+const SHADOW_CASCADES = 4;
+const GLOBALS_FLOATS = 172;
 const OBJECT_FLOATS = 40;
+
+function shadowSizeForQuality(quality) {
+  if (quality <= 0) return 1024;
+  if (quality === 1) return 1536;
+  if (quality >= 3) return 4096;
+  return 2048;
+}
+
+function cascadeCountForSettings(settings) {
+  const explicit = settings?.shadow_cascades ?? 0;
+  if (explicit >= 1 && explicit <= SHADOW_CASCADES) return explicit;
+  return [2, 3, 4, 4][settings?.shadow_quality ?? 2] ?? 4;
+}
+
+function transformVec4(m, v) {
+  const x = v[0], y = v[1], z = v[2], w = v[3];
+  return [
+    m[0] * x + m[4] * y + m[8] * z + m[12] * w,
+    m[1] * x + m[5] * y + m[9] * z + m[13] * w,
+    m[2] * x + m[6] * y + m[10] * z + m[14] * w,
+    m[3] * x + m[7] * y + m[11] * z + m[15] * w,
+  ];
+}
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -95,6 +118,16 @@ class WebGPURenderer {
   mainPipeline;
   shadowPipeline;
   particlePipeline;
+  postPipeline;
+  postModule;
+  hdrTexture;
+  hdrView;
+  normalTexture;
+  normalView;
+  postLayout;
+  postBindGroup;
+  postUniformBuffer;
+  postSampler;
   frameLayout;
   objectLayout;
   textureLayout;
@@ -112,9 +145,11 @@ class WebGPURenderer {
   depthView;
   shadowTexture;
   shadowView;
+  shadowViews = [];
   shadowSampler;
-  shadowGlobals;
-  shadowBindGroup;
+  shadowGlobals = [];
+  shadowBindGroups = [];
+  shadowSize = 2048;
   scratch;
   nextMeshId = 100;
   nextTextureId = 1;
@@ -132,11 +167,14 @@ class WebGPURenderer {
     this.shadowModule = device.createShaderModule({ code: shaders.shadow, label: "egn-shadow-shader" });
     const spriteModule = device.createShaderModule({ code: shaders.sprite, label: "egn-sprite-shader" });
     const particleModule = device.createShaderModule({ code: shaders.particle, label: "egn-particle-shader" });
+    this.postModule = device.createShaderModule({ code: shaders.post, label: "egn-post-shader" });
+    const hdrFormat = "rgba16float";
+    const normalFormat = "rgba16float";
     this.frameLayout = device.createBindGroupLayout({
       label: "egn-frame-layout",
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth", viewDimension: "2d-array" } },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } }
       ]
     });
@@ -177,19 +215,23 @@ class WebGPURenderer {
       label: "egn-main-pipeline",
       layout: this.mainPipelineLayout,
       vertex: { module: this.sceneModule, entryPoint: "vs_main", buffers: vertexBuffers },
-      fragment: { module: this.sceneModule, entryPoint: "fs_main", targets: [{ format }] },
+      fragment: { module: this.sceneModule, entryPoint: "fs_main",
+        targets: [{ format: hdrFormat }, { format: normalFormat }] },
       primitive: { topology: "triangle-list", cullMode: "none", frontFace: "ccw" },
-      depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
+      depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less" }
     });
     this.spritePipeline = device.createRenderPipeline({
       label: "egn-sprite-pipeline",
       layout: this.mainPipelineLayout,
       vertex: { module: spriteModule, entryPoint: "vs_main", buffers: vertexBuffers },
-      fragment: { module: spriteModule, entryPoint: "fs_main", targets: [{ format,
-        blend: { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
-                 alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } } }] },
+      fragment: { module: spriteModule, entryPoint: "fs_main", targets: [
+        { format: hdrFormat,
+          blend: { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+                   alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } } },
+        { format: normalFormat }
+      ] },
       primitive: { topology: "triangle-list", cullMode: "none" },
-      depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "less-equal" }
+      depthStencil: { format: "depth32float", depthWriteEnabled: false, depthCompare: "less-equal" }
     });
     this.shadowPipeline = device.createRenderPipeline({
       label: "egn-shadow-pipeline",
@@ -223,15 +265,43 @@ class WebGPURenderer {
         module: particleModule,
         entryPoint: "fs_main",
         targets: [{
-          format,
+          format: hdrFormat,
           blend: {
             color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
             alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" }
           }
-        }]
+        }, { format: normalFormat }]
       },
       primitive: { topology: "triangle-list", cullMode: "none" },
-      depthStencil: { format: "depth24plus", depthWriteEnabled: false, depthCompare: "less" }
+      depthStencil: { format: "depth32float", depthWriteEnabled: false, depthCompare: "less" }
+    });
+
+    this.postSampler = device.createSampler({
+      label: "egn-post-sampler",
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "clamp-to-edge",
+      addressModeV: "clamp-to-edge"
+    });
+    this.postUniformBuffer = device.createBuffer({
+      label: "egn-post-uniforms",
+      size: 5 * 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+    this.postLayout = device.createBindGroupLayout({
+      label: "egn-post-layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }
+      ]
+    });
+    this.postPipeline = device.createRenderPipeline({
+      label: "egn-post-pipeline",
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this.postLayout] }),
+      vertex: { module: this.postModule, entryPoint: "vs_main" },
+      fragment: { module: this.postModule, entryPoint: "fs_main", targets: [{ format }] },
+      primitive: { topology: "triangle-list", cullMode: "none" }
     });
 
     this.createShadowResources();
@@ -241,29 +311,48 @@ class WebGPURenderer {
   }
   createShadowResources() {
     const device = this.device;
+    this.shadowTexture?.destroy();
+    for (const buffer of this.shadowGlobals) buffer.destroy();
+    this.shadowViews = [];
+    this.shadowGlobals = [];
+    this.shadowBindGroups = [];
+
+    const size = this.shadowSize;
     this.shadowTexture = device.createTexture({
-      label: "egn-shadow-map",
-      size: [SHADOW_SIZE, SHADOW_SIZE],
+      label: "egn-shadow-map-array",
+      size: [size, size, SHADOW_CASCADES],
       format: "depth32float",
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
     });
-    this.shadowView = this.shadowTexture.createView();
-    this.shadowSampler = device.createSampler({
-      compare: "less-equal",
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "clamp-to-edge",
-      addressModeV: "clamp-to-edge"
-    });
-    this.shadowGlobals = device.createBuffer({
-      label: "egn-shadow-globals",
-      size: 64,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-    });
-    this.shadowBindGroup = device.createBindGroup({
-      layout: this.shadowFrameLayout,
-      entries: [{ binding: 0, resource: { buffer: this.shadowGlobals } }]
-    });
+    this.shadowView = this.shadowTexture.createView({ dimension: "2d-array" });
+    if (!this.shadowSampler) {
+      this.shadowSampler = device.createSampler({
+        compare: "less-equal",
+        magFilter: "linear",
+        minFilter: "linear",
+        addressModeU: "clamp-to-edge",
+        addressModeV: "clamp-to-edge"
+      });
+    }
+    for (let cascade = 0; cascade < SHADOW_CASCADES; cascade++) {
+      this.shadowViews.push(this.shadowTexture.createView({
+        dimension: "2d",
+        baseArrayLayer: cascade,
+        arrayLayerCount: 1
+      }));
+      const buffer = device.createBuffer({
+        label: `egn-shadow-globals-${cascade}`,
+        size: 64,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+      });
+      this.shadowGlobals.push(buffer);
+      this.shadowBindGroups.push(device.createBindGroup({
+        layout: this.shadowFrameLayout,
+        entries: [{ binding: 0, resource: { buffer } }]
+      }));
+    }
+    for (const gpu of this.cameraGpu.values()) gpu.buffer.destroy();
+    this.cameraGpu.clear();
   }
   createSolidTexture() {
     const texture = this.device.createTexture({
@@ -442,19 +531,43 @@ class WebGPURenderer {
     const dpr = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.floor(this.canvas.clientWidth * dpr));
     const height = Math.max(1, Math.floor(this.canvas.clientHeight * dpr));
-    if (this.canvas.width === width && this.canvas.height === height && this.depthTexture) {
+    if (this.canvas.width === width && this.canvas.height === height && this.depthTexture && this.hdrTexture) {
       return;
     }
     this.canvas.width = width;
     this.canvas.height = height;
     this.depthTexture?.destroy();
+    this.hdrTexture?.destroy();
+    this.normalTexture?.destroy();
     this.depthTexture = this.device.createTexture({
       label: "egn-depth",
       size: [width, height],
-      format: "depth24plus",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT
+      format: "depth32float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
     });
     this.depthView = this.depthTexture.createView();
+    this.hdrTexture = this.device.createTexture({
+      label: "egn-hdr-colour",
+      size: [width, height],
+      format: "rgba16float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    });
+    this.hdrView = this.hdrTexture.createView();
+    this.normalTexture = this.device.createTexture({
+      label: "egn-normal",
+      size: [width, height],
+      format: "rgba16float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    });
+    this.normalView = this.normalTexture.createView();
+    this.postBindGroup = this.device.createBindGroup({
+      layout: this.postLayout,
+      entries: [
+        { binding: 0, resource: this.hdrView },
+        { binding: 1, resource: this.postSampler },
+        { binding: 2, resource: { buffer: this.postUniformBuffer } }
+      ]
+    });
   }
   floats(ptr, offset, count) {
     return new Float32Array(this.module.HEAPF32.buffer, ptr + offset * 4, count).slice();
@@ -559,6 +672,10 @@ class WebGPURenderer {
           projection,
           viewport,
           clearColor,
+          aspect,
+          near,
+          far,
+          fov: m._egn_camera_get_fov(component) * Math.PI / 180,
           order: m._egn_camera_get_order(component)
         });
       }
@@ -888,7 +1005,7 @@ class WebGPURenderer {
     this.device.queue.writeBuffer(gpu.buffer, 0, data);
     return gpu;
   }
-  cameraFrame(camera, shadowViewProjection, sun, pointLights, shadowEnabled) {
+  cameraFrame(camera, cascades, sun, pointLights, shadowEnabled) {
     let gpu = this.cameraGpu.get(camera.component);
     if (!gpu) {
       const buffer = this.device.createBuffer({
@@ -909,6 +1026,7 @@ class WebGPURenderer {
       };
       this.cameraGpu.set(camera.component, gpu);
     }
+    const settings = this.graphicsSettings ?? {};
     const data = new Float32Array(GLOBALS_FLOATS);
     const viewProjection = this.math.mat4.multiply(camera.projection, camera.view);
     data.set(viewProjection, 0);
@@ -921,34 +1039,107 @@ class WebGPURenderer {
       data.set([direction[0], direction[1], direction[2], sun.intensity], 24);
       data.set([sun.color[0], sun.color[1], sun.color[2], 0.68], 28);
     }
-    data.set(shadowViewProjection, 32);
-    data.set([pointLights.length, shadowEnabled && !!sun?.castShadows ? 1 : 0, 1 / SHADOW_SIZE, this.graphicsSettings?.shadowQuality ?? 1], 48);
+    for (let cascade = 0; cascade < SHADOW_CASCADES; cascade++) {
+      const matrix = cascades.matrices[cascade] ?? this.math.mat4.identity();
+      data.set(matrix, 32 + cascade * 16);
+    }
+    data.set(cascades.splits, 96);
+    data.set([shadowEnabled ? 1 : 0, cascades.count, 1 / this.shadowSize,
+      settings.shadow_softness ?? 1], 100);
+    data.set([pointLights.length, shadowEnabled ? 1 : 0, 0, 0], 104);
     for (let i = 0; i < pointLights.length && i < 8; i++) {
       const light = pointLights[i];
-      data.set([light.world[12], light.world[13], light.world[14], light.range], 52 + i * 8);
-      data.set([light.color[0], light.color[1], light.color[2], light.intensity], 56 + i * 8);
+      data.set([light.world[12], light.world[13], light.world[14], light.range], 108 + i * 8);
+      data.set([light.color[0], light.color[1], light.color[2], light.intensity], 112 + i * 8);
     }
     this.device.queue.writeBuffer(gpu.buffer, 0, data);
     return gpu;
   }
-  computeShadow(camera, sun) {
-    if (!sun || !sun.castShadows) {
-      return this.math.mat4.identity();
+  computeShadowCascades(camera, sun) {
+    const count = cascadeCountForSettings(this.graphicsSettings);
+    const result = {
+      matrices: [
+        this.math.mat4.identity(), this.math.mat4.identity(),
+        this.math.mat4.identity(), this.math.mat4.identity()
+      ],
+      splits: [0, 0, 0, 0],
+      count: 0
+    };
+    if (!sun || !sun.castShadows || !camera) {
+      return result;
     }
+
+    const settings = this.graphicsSettings ?? {};
     const direction = this.math.vec3.normalize([sun.world[8], sun.world[9], sun.world[10]]);
-    const center = [0, 0, 0];
-    const lightPosition = [
-      center[0] + direction[0] * 45,
-      center[1] + direction[1] * 45,
-      center[2] + direction[2] * 45
-    ];
-    let up = [0, 1, 0];
-    if (Math.abs(this.math.vec3.dot(direction, up)) > 0.99) {
-      up = [0, 0, 1];
+    const near = Math.max(0.05, camera.near ?? 0.1);
+    let far = Math.min(camera.far ?? 300, settings.shadow_distance ?? 120);
+    if (far <= near + 0.1) far = near + 0.1;
+
+    const splits = [];
+    const lambda = 0.65;
+    for (let i = 0; i < count; i++) {
+      const p = (i + 1) / count;
+      const logarithmic = near * Math.pow(far / near, p);
+      const linear = near + (far - near) * p;
+      splits.push(Math.min(far, lambda * logarithmic + (1 - lambda) * linear));
     }
-    const view = this.math.mat4.lookAt(lightPosition, center, up);
-    const projection = this.math.mat4.ortho(-25, 25, -25, 25, 0.1, 100);
-    return this.math.mat4.multiply(projection, view);
+
+    const fov = camera.fov ?? Math.PI / 3;
+    const aspect = camera.aspect ?? 1;
+    for (let cascade = 0; cascade < count; cascade++) {
+      const cascadeNear = cascade === 0 ? near : splits[cascade - 1];
+      const cascadeFar = splits[cascade];
+      const projection = this.math.mat4.perspective(fov, aspect, cascadeNear, cascadeFar);
+      const inverse = this.math.mat4.inverse(this.math.mat4.multiply(projection, camera.view));
+
+      const corners = [];
+      for (let z = 0; z < 2; z++) {
+        for (let y = 0; y < 2; y++) {
+          for (let x = 0; x < 2; x++) {
+            const world = transformVec4(inverse, [x ? 1 : -1, y ? 1 : -1, z ? 1 : 0, 1]);
+            const invW = world[3] !== 0 ? 1 / world[3] : 1;
+            corners.push([world[0] * invW, world[1] * invW, world[2] * invW]);
+          }
+        }
+      }
+
+      const center = [0, 0, 0];
+      for (const corner of corners) {
+        center[0] += corner[0] / 8;
+        center[1] += corner[1] / 8;
+        center[2] += corner[2] / 8;
+      }
+      let radius = 0;
+      for (const corner of corners) {
+        const dx = corner[0] - center[0];
+        const dy = corner[1] - center[1];
+        const dz = corner[2] - center[2];
+        radius = Math.max(radius, Math.hypot(dx, dy, dz));
+      }
+      radius = Math.max(0.5, radius * 1.08);
+
+      let up = [0, 1, 0];
+      if (Math.abs(this.math.vec3.dot(direction, up)) > 0.99) {
+        up = [0, 0, 1];
+      }
+      const lightPosition = [
+        center[0] + direction[0] * (radius + 10),
+        center[1] + direction[1] * (radius + 10),
+        center[2] + direction[2] * (radius + 10)
+      ];
+      const lightView = this.math.mat4.lookAt(lightPosition, center, up);
+      const lightProjection = this.math.mat4.ortho(-radius, radius, -radius, radius, 0.1, radius * 2 + 20);
+      const matrix = this.math.mat4.multiply(lightProjection, lightView);
+      result.matrices[cascade] = matrix;
+      this.device.queue.writeBuffer(this.shadowGlobals[cascade], 0, new Float32Array(matrix));
+    }
+
+    for (let cascade = count; cascade < SHADOW_CASCADES; cascade++) {
+      splits.push(splits[count - 1]);
+    }
+    result.splits = splits.slice(0, SHADOW_CASCADES);
+    result.count = count;
+    return result;
   }
   render(dt = 1 / 60) {
     this.resize();
@@ -979,9 +1170,9 @@ class WebGPURenderer {
     if (!camera || !this.depthView) {
       return;
     }
-    const shadowViewProjection = this.computeShadow(camera, sun);
-    const shadowEnabled = (this.graphicsSettings?.shadowsEnabled ?? true) && !!sun?.castShadows;
-    this.device.queue.writeBuffer(this.shadowGlobals, 0, shadowViewProjection);
+    const cascades = this.computeShadowCascades(camera, sun);
+    const shadowEnabled = (this.graphicsSettings?.shadows_enabled ?? true) &&
+      !!sun?.castShadows && cascades.count > 0;
     this.stats.objects = scene.models.length;
     this.stats.cameras = scene.cameras.length;
     this.stats.drawCalls = 0;
@@ -1011,34 +1202,36 @@ class WebGPURenderer {
     for (const sprite of scene.sprites) this.objectBuffer(sprite);
     const encoder = this.device.createCommandEncoder({ label: "egn-frame" });
     if (shadowEnabled) {
-      const pass = encoder.beginRenderPass({
-        label: "egn-shadow-pass",
-        colorAttachments: [],
-        depthStencilAttachment: {
-          view: this.shadowView,
-          depthClearValue: 1,
-          depthLoadOp: "clear",
-          depthStoreOp: "store"
+      for (let cascade = 0; cascade < cascades.count; cascade++) {
+        const pass = encoder.beginRenderPass({
+          label: `egn-shadow-pass-${cascade}`,
+          colorAttachments: [],
+          depthStencilAttachment: {
+            view: this.shadowViews[cascade],
+            depthClearValue: 1,
+            depthLoadOp: "clear",
+            depthStoreOp: "store"
+          }
+        });
+        pass.setPipeline(this.shadowPipeline);
+        pass.setBindGroup(0, this.shadowBindGroups[cascade]);
+        for (const item of scene.models) {
+          if (!item.castShadows || item.domain !== 0) continue;
+          const mesh = this.meshes.get(item.mesh);
+          const objectGpu = this.objectGpu.get(item.component);
+          if (!mesh || !objectGpu) continue;
+          pass.setBindGroup(1, objectGpu.bindGroup);
+          pass.setVertexBuffer(0, this.animatedGpu.get(item.component)?.buffer ?? mesh.vertexBuffer);
+          pass.setIndexBuffer(mesh.indexBuffer, "uint32");
+          pass.drawIndexed(mesh.indexCount);
+          this.stats.shadowCasters++;
         }
-      });
-      pass.setPipeline(this.shadowPipeline);
-      pass.setBindGroup(0, this.shadowBindGroup);
-      for (const item of scene.models) {
-        if (!item.castShadows || item.domain !== 0) continue;
-        const mesh = this.meshes.get(item.mesh);
-        const objectGpu = this.objectGpu.get(item.component);
-        if (!mesh || !objectGpu) continue;
-        pass.setBindGroup(1, objectGpu.bindGroup);
-        pass.setVertexBuffer(0, this.animatedGpu.get(item.component)?.buffer ?? mesh.vertexBuffer);
-        pass.setIndexBuffer(mesh.indexBuffer, "uint32");
-        pass.drawIndexed(mesh.indexCount);
-        this.stats.shadowCasters++;
+        pass.end();
       }
-      pass.end();
     }
     const frameBindGroups = /* @__PURE__ */ new Map();
     for (const cam of scene.cameras) {
-      frameBindGroups.set(cam, this.cameraFrame(cam, shadowViewProjection, sun, pointLights, shadowEnabled).bindGroup);
+      frameBindGroups.set(cam, this.cameraFrame(cam, cascades, sun, pointLights, shadowEnabled).bindGroup);
     }
     let first = true;
     for (const cam of scene.cameras) {
@@ -1048,12 +1241,20 @@ class WebGPURenderer {
       const height = Math.max(1, Math.floor(cam.viewport[3] * this.canvas.height));
       const pass = encoder.beginRenderPass({
         label: "egn-main-pass",
-        colorAttachments: [{
-          view: this.context.getCurrentTexture().createView(),
-          clearValue: { r: cam.clearColor[0], g: cam.clearColor[1], b: cam.clearColor[2], a: cam.clearColor[3] },
-          loadOp: first || cam.clearColorEnabled ? "clear" : "load",
-          storeOp: "store"
-        }],
+        colorAttachments: [
+          {
+            view: this.hdrView,
+            clearValue: { r: cam.clearColor[0], g: cam.clearColor[1], b: cam.clearColor[2], a: cam.clearColor[3] },
+            loadOp: first || cam.clearColorEnabled ? "clear" : "load",
+            storeOp: "store"
+          },
+          {
+            view: this.normalView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: first ? "clear" : "load",
+            storeOp: "store"
+          }
+        ],
         depthStencilAttachment: {
           view: this.depthView,
           depthClearValue: 1,
@@ -1122,12 +1323,65 @@ class WebGPURenderer {
       pass.end();
       first = false;
     }
+
+    this.updatePostUniforms();
+    const postPass = encoder.beginRenderPass({
+      label: "egn-post-pass",
+      colorAttachments: [{
+        view: this.context.getCurrentTexture().createView(),
+        clearValue: { r: 0, g: 0, b: 0, a: 1 },
+        loadOp: "clear",
+        storeOp: "store"
+      }]
+    });
+    postPass.setPipeline(this.postPipeline);
+    postPass.setBindGroup(0, this.postBindGroup);
+    postPass.draw(3, 1, 0, 0);
+    postPass.end();
+
     this.device.queue.submit([encoder.finish()]);
+  }
+  applyGraphicsSettings(settings) {
+    this.graphicsSettings = settings;
+    const size = shadowSizeForQuality(settings?.shadow_quality ?? 2);
+    if (size !== this.shadowSize) {
+      this.shadowSize = size;
+      this.createShadowResources();
+    }
+  }
+  updatePostUniforms() {
+    const s = this.graphicsSettings ?? {};
+    const grading = !!s.color_grading_enabled;
+    const data = new Float32Array(20);
+    data[0] = Math.pow(2, s.exposure_compensation ?? 0);
+    data[1] = s.tone_mapper ?? 1;
+    data[2] = s.tone_mapping_enabled ?? true ? 1 : 0;
+    data[3] = s.hdr_enabled ?? true ? 1 : 0;
+    data[4] = grading ? (s.contrast ?? 1) : 1;
+    data[5] = grading ? (s.saturation ?? 1) : 1;
+    data[6] = grading ? (s.temperature ?? 0) : 0;
+    data[7] = grading ? (s.tint ?? 0) : 0;
+    data[8] = grading ? (s.lift_r ?? 0) : 0;
+    data[9] = grading ? (s.lift_g ?? 0) : 0;
+    data[10] = grading ? (s.lift_b ?? 0) : 0;
+    data[11] = grading ? (s.vignette ?? 0) : 0;
+    data[12] = grading ? (s.gamma_r ?? 1) : 1;
+    data[13] = grading ? (s.gamma_g ?? 1) : 1;
+    data[14] = grading ? (s.gamma_b ?? 1) : 1;
+    data[15] = s.lut_strength ?? 1;
+    data[16] = grading ? (s.gain_r ?? 1) : 1;
+    data[17] = grading ? (s.gain_g ?? 1) : 1;
+    data[18] = grading ? (s.gain_b ?? 1) : 1;
+    data[19] = s.lut_enabled ? 1 : 0;
+    this.device.queue.writeBuffer(this.postUniformBuffer, 0, data);
   }
   destroy() {
     this.depthTexture?.destroy();
+    this.hdrTexture?.destroy();
+    this.normalTexture?.destroy();
+    this.postUniformBuffer?.destroy();
     this.shadowTexture?.destroy();
-    this.shadowGlobals?.destroy();
+    for (const buffer of this.shadowGlobals) buffer.destroy();
     if (this.scratch) this.module._free(this.scratch);
     this.scratch = 0;
     this.math.destroy();

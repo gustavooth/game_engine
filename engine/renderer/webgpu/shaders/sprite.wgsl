@@ -18,6 +18,11 @@ struct VertexOutput { @builtin(position) position: vec4f, @location(0) uv: vec2f
   output.uv = uv;
   return output;
 }
-@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4f {
-  return textureSample(tex, texSampler, input.uv) * object.color;
+struct FragmentOutput {
+  @location(0) colour: vec4f,
+  @location(1) normal: vec4f,
+};
+
+@fragment fn fs_main(input: VertexOutput) -> FragmentOutput {
+  return FragmentOutput(textureSample(tex, texSampler, input.uv) * object.color, vec4f(0.0));
 }
