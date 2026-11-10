@@ -23,4 +23,5 @@ void vkrenderer_post_end_scene(VkContext *ctx, VkRendererCommandBuffer *command_
 
 // Tone mapping + color grading into the current swapchain image. Must be
 // called outside the scene render pass.
-void vkrenderer_post_process(VkContext *ctx, VkRendererCommandBuffer *command_buffer);
+void vkrenderer_post_process(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
+                             f64 delta_time);

@@ -4,6 +4,16 @@ layout(location = 0) in vec2 v_uv;
 layout(location = 0) out vec4 out_colour;
 
 layout(set = 0, binding = 0) uniform sampler2D u_scene;
+layout(set = 0, binding = 1) uniform sampler2D u_effects;
+layout(set = 0, binding = 2) uniform sampler2D u_bloom;
+layout(set = 0, binding = 4) uniform sampler3D u_lut;
+layout(std430, set = 0, binding = 3) readonly buffer ExposureBuffer
+{
+  float exposure_value;
+  float average_luminance;
+  float target_exposure;
+  float exposure_padding;
+} exposure_data;
 
 layout(push_constant) uniform PostConstants
 {
@@ -12,6 +22,9 @@ layout(push_constant) uniform PostConstants
   vec4 lift;             // lift rgb, vignette
   vec4 gamma;            // gamma rgb, lut strength
   vec4 gain;             // gain rgb, lut enabled
+  vec4 effects;          // ao enabled, gi enabled, gi intensity, ao intensity
+  vec4 bloom;            // enabled, intensity, threshold, radius
+  vec4 exposure_mode;    // auto exposure enabled, manual multiplier, unused
 } pc;
 
 vec3 tonemap_reinhard(vec3 colour)
@@ -64,8 +77,14 @@ vec3 apply_tonemap(vec3 colour, int mapper)
 void main()
 {
   vec3 colour = texture(u_scene, v_uv).rgb;
+  vec4 effects = texture(u_effects, v_uv);
+  float ao = mix(1.0, effects.a, pc.effects.x);
+  vec3 gi = effects.rgb * pc.effects.y * pc.effects.z;
+  colour = colour * ao + gi;
+  colour += texture(u_bloom, v_uv).rgb * pc.bloom.x * pc.bloom.y;
 
-  float exposure = pc.exposure_tonemap.x;
+  float exposure = pc.exposure_mode.x > 0.5 ? exposure_data.exposure_value
+                                             : pc.exposure_mode.y;
   int mapper = int(pc.exposure_tonemap.y + 0.5);
   bool tone_mapping = pc.exposure_tonemap.z > 0.5;
   bool hdr = pc.exposure_tonemap.w > 0.5;
@@ -98,6 +117,12 @@ void main()
   colour = mix(vec3(luma), colour, pc.grading.y);
   colour = (colour - vec3(0.5)) * pc.grading.x + vec3(0.5);
   colour = clamp(colour, 0.0, 1.0);
+
+  if (pc.gain.w > 0.5 && pc.gamma.w > 0.0)
+  {
+    vec3 graded = texture(u_lut, clamp(colour, 0.0, 1.0)).rgb;
+    colour = mix(colour, graded, clamp(pc.gamma.w, 0.0, 1.0));
+  }
 
   vec2 centered = v_uv * 2.0 - 1.0;
   float vignette = smoothstep(0.35, 1.25, dot(centered, centered));

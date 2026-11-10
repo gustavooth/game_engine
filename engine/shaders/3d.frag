@@ -32,6 +32,8 @@ layout(set = 2, binding = 0) uniform LightingBlock
   vec4 cascade_splits;
   vec4 shadow_params;
   vec4 point_count;
+  vec4 fog_params;
+  vec4 fog_color;
   PointLight point_lights[MAX_POINT_LIGHTS];
 } lighting;
 
@@ -231,5 +233,16 @@ void main()
     }
   }
 
-  out_colour = vec4(colour + emissive, base.a);
+  colour += emissive;
+
+  if (lighting.fog_params.z > 0.5)
+  {
+    float distance_to_camera = length(lighting.camera_position.xyz - v_world_position);
+    float density = lighting.fog_params.x *
+                    exp(-lighting.fog_params.y * max(v_world_position.y, 0.0));
+    float fog = clamp(1.0 - exp(-density * distance_to_camera), 0.0, 1.0);
+    colour = mix(colour, lighting.fog_color.rgb, fog);
+  }
+
+  out_colour = vec4(colour, base.a);
 }

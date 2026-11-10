@@ -13,7 +13,7 @@ export async function start(canvas) {
   const format = navigator.gpu.getPreferredCanvasFormat();
   context.configure({ device, format, alphaMode: "opaque" });
   const base = new URL("../../renderer/webgpu/shaders/", import.meta.url);
-  const shaderNames = ["scene", "shadow", "particle", "sprite", "post"];
+  const shaderNames = ["scene", "shadow", "particle", "sprite", "post", "sky", "effects", "bloom", "exposure"];
   const shaders = await Promise.all(shaderNames.map(async (name) => {
     const response = await fetch(new URL(`${name}.wgsl`, base));
     if (!response.ok) throw new Error(`failed to load shader: ${name}`);
@@ -21,7 +21,8 @@ export async function start(canvas) {
   }));
   const renderer = new WebGPURenderer(canvas, device, context, format, module, {
     scene: shaders[0], shadow: shaders[1], particle: shaders[2], sprite: shaders[3],
-    post: shaders[4]
+    post: shaders[4], sky: shaders[5], effects: shaders[6], bloom: shaders[7],
+    exposure: shaders[8]
   });
   globalThis.egnWebRenderer = renderer;
   const controller = new AbortController();

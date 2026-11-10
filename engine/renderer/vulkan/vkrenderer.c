@@ -15,6 +15,8 @@
 #include "vkrenderer_skin.h"
 #include "vkrenderer_lighting.h"
 #include "vkrenderer_post.h"
+#include "vkrenderer_sky.h"
+#include "vkrenderer_lut.h"
 #include "vkrenderer_particles.h"
 #include "vkrenderer_mesh.h"
 #include "vkrenderer_texture.h"
@@ -270,6 +272,9 @@ b8 renderer_initialize(Window *win, u32 width, u32 height, b8 vsync)
     return false;
   }
 
+  if (!vkrenderer_sky_create(&ctx))
+    return false;
+
   if (ctx.device.properties.limits.maxPushConstantsSize < 192)
   {
     EGNERROR("VKRENDERER device does not support 148 bytes of push constants");
@@ -347,6 +352,7 @@ void renderer_shutdown()
   vkrenderer_shader_destroy(&ctx, &ctx.shadow_shader);
 
   vkrenderer_particles_destroy(&ctx);
+  vkrenderer_sky_destroy(&ctx);
   vkrenderer_post_destroy(&ctx);
   vkrenderer_lighting_destroy(&ctx);
   vkrenderer_skin_destroy(&ctx);
@@ -398,7 +404,7 @@ b8 renderer_draw_frame(RenderPacket packet)
   vkrenderer_scene_render(&ctx, command_buffer);
   vkrenderer_post_end_scene(&ctx, command_buffer);
 
-  vkrenderer_post_process(&ctx, command_buffer);
+  vkrenderer_post_process(&ctx, command_buffer, packet.delta_time);
 
   if (!end_frame())
     return false;
@@ -789,6 +795,7 @@ b8 handle_recreate_swapchain()
 
 u32 renderer_lut_load(const char *path)
 {
-  (void)path;
-  return 0;
+  if (!path || path[0] == '\0')
+    return 0;
+  return vkrenderer_lut_load(&ctx, path);
 }

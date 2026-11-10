@@ -1,0 +1,84 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer ExposureBuffer
+{
+  float exposure;
+  float average_luminance;
+  float target_exposure;
+  float padding;
+} exposure_data;
+
+layout(set = 0, binding = 1) uniform sampler2D scene_colour;
+
+layout(push_constant) uniform ExposureConstants
+{
+  vec4 params;  // dt, adaptation speed, min EV, max EV
+  vec4 params2; // grid size, unused, auto enabled, unused
+} pc;
+
+shared uint histogram[256];
+
+void main()
+{
+  uint thread = gl_LocalInvocationID.x;
+  if (thread < 256u)
+    histogram[thread] = 0u;
+  barrier();
+
+  int grid = int(max(pc.params2.x, 8.0));
+  uint total = uint(grid * grid);
+  ivec2 size = textureSize(scene_colour, 0);
+
+  for (uint index = thread; index < total; index += 256u)
+  {
+    uint x = index % uint(grid);
+    uint y = index / uint(grid);
+    vec2 uv = (vec2(float(x), float(y)) + vec2(0.5)) / float(grid);
+    ivec2 texel = ivec2(uv * vec2(size));
+    vec3 colour = texelFetch(scene_colour, clamp(texel, ivec2(0), size - 1), 0).rgb;
+    float luminance = max(dot(colour, vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+    float log_luminance = log2(luminance);
+    int bin = int(clamp((log_luminance + 12.0) / 16.0 * 255.0, 0.0, 255.0));
+    atomicAdd(histogram[bin], 1u);
+  }
+  barrier();
+
+  if (thread != 0u)
+    return;
+
+  uint total_samples = 0u;
+  for (int i = 0; i < 256; i++)
+    total_samples += histogram[i];
+
+  if (total_samples == 0u)
+    return;
+
+  float low = float(total_samples) * 0.05;
+  float high = float(total_samples) * 0.95;
+  float cumulative = 0.0;
+  float weighted_log = 0.0;
+  uint count = 0u;
+  for (int i = 0; i < 256; i++)
+  {
+    float next = cumulative + float(histogram[i]);
+    if (next > low && cumulative < high)
+    {
+      float bin_log = -12.0 + (float(i) + 0.5) / 255.0 * 16.0;
+      weighted_log += bin_log * float(histogram[i]);
+      count += histogram[i];
+    }
+    cumulative = next;
+  }
+
+  if (count == 0u)
+    return;
+
+  float average_log = weighted_log / float(count);
+  float target = exp2(clamp(log2(0.18) - average_log, pc.params.z, pc.params.w));
+  float speed = 1.0 - exp(-max(pc.params.y, 0.0) * max(pc.params.x, 0.0));
+  exposure_data.exposure = mix(exposure_data.exposure, target, clamp(speed, 0.0, 1.0));
+  exposure_data.average_luminance = exp2(average_log);
+  exposure_data.target_exposure = target;
+}

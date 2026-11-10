@@ -32,4 +32,17 @@ um download da imagem do canvas.
 
 Os shaders WGSL são validados pelo Naga. O código V e as APIs de cena, física,
 texto e jogo são compartilhados; os backends Vulkan e WebGPU permanecem
-implementações gráficas diferentes.
+implementações gráficas diferentes, mas recebem o mesmo lote de
+`GraphicsSettings`.
+
+O backend WebGPU implementa o mesmo pipeline conceitual do Vulkan: alvo HDR,
+tone mapping/color grading, LUT 3D `.cube`, CSM com textura array, PBR com
+mapas metallic-roughness/normal/oclusão/emissive, céu atmosférico, SSAO+SSGI,
+bloom e auto exposure por histograma em compute shader. A configuração é
+aplicada no início do frame pelo mesmo `set_graphics_settings`; o host envia o
+lote completo como JSON somente quando ele muda. A demo usa `ultra` e os
+atalhos `F3`..`F11`/`L` descritos no README principal.
+
+O ambiente de desenvolvimento pode não expor um adaptador WebGPU mesmo com
+`navigator.gpu` presente; nesse caso a demo mostra um erro controlado. O build
+e a validação WGSL continuam funcionando sem GPU.

@@ -21,6 +21,8 @@ typedef struct VkRendererLighting
   vec4 cascade_splits; // xyz/w = far distance of each cascade
   vec4 shadow_params;  // x = texel size, y = enabled, z = cascade count, w = softness
   vec4 point_count;    // x = count, yzw = reserved
+  vec4 fog_params;     // x = density, y = height falloff, z = enabled, w = unused
+  vec4 fog_color;      // rgb = fog colour, w = unused
   VkRendererPointLight point_lights[VKRENDERER_MAX_POINT_LIGHTS];
 } VkRendererLighting;
 

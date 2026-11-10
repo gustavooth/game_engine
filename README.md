@@ -14,7 +14,10 @@ do módulo **EGN** (`egn/`).
 - **Etapa 2/3 (concluída):** carregamento de `.obj` multi-material (submeshes +
   `map_Kd`) e `.glb`/glTF binário com skeleton, skinning GPU e clips de
   animação.
-- **Iluminação:** sol direcional com shadow map, luzes pontuais e luz ambiente.
+- **Pipeline gráfico ultra:** PBR com mapas completos, HDR, tone mapping,
+  color grading com LUT 3D, CSM com até 4 cascatas, atmospheric scattering,
+  SSAO + SSGI, bloom, auto exposure por histograma e presets
+  low/medium/high/ultra aplicáveis em runtime.
 - **Física:** Jolt Physics via JoltC: rigidbodies 2D/3D, colisores box, esfera
   e malha (inclusive malha dinâmica), com timestep fixo.
 - **Partículas:** simulação em compute shader na GPU e renderização de
@@ -23,8 +26,9 @@ do módulo **EGN** (`egn/`).
   com fila de eventos e mensagens com tamanho prefixado no TCP.
 - **Demo:** personagem Fox animado, chão, física, partículas, luzes, câmera FPS
   com pointer lock real no Wayland e captura de tela.
-- **Web:** o mesmo jogo V compilado para WASM, com renderizador WebGPU
-  web com física, OBJ/GLB, luzes, sombras e câmera FPS.
+- **Web:** o mesmo jogo V compilado para WASM, com renderizador WebGPU com
+  física, OBJ/GLB, PBR, HDR, CSM, atmosfera, SSAO/SSGI, bloom, auto exposure,
+  color grading/LUT e câmera FPS.
 
 ## Arquitetura
 
@@ -400,6 +404,9 @@ Controles:
 | `Esc` | encerra o jogo |
 | `F1` | alterna vsync |
 | `F2` | alterna limite de FPS (off/60/120/144) |
+| `F3` | cicla preset gráfico |
+| `F4`..`F11` | liga/desliga HDR, sombras, AO, GI, atmosfera, bloom, auto exposure e color grading |
+| `L` | liga/desliga o LUT de exemplo |
 | `F12` | salva `screenshot.png` |
 
 A camada de rede continua disponível no SDK (`egn/network.v`), mas o demo
@@ -432,54 +439,75 @@ WebGPU requer um navegador compatível e um contexto seguro (localhost/HTTPS).
 O VSync e a apresentação no navegador são controlados pelo próprio navegador.
 Consulte `web/README.md` para detalhes da arquitetura e das limitações.
 
-### Configuração gráfica (primeira etapa)
+### Configuração gráfica
 
-A API C permite configurar as sombras antes de `engine_create_instance` e
-alterá-las entre quadros. A estrutura completa é validada e aplicada de uma vez;
-valores inválidos são rejeitados sem alterar a configuração anterior.
+O renderizador Vulkan e o WebGPU usam a mesma estrutura de configuração e os
+mesmos presets. Cada recurso tem um interruptor e uma qualidade independente:
+
+- **HDR** em alvo `RGBA16F`, tone mapping Reinhard/ACES/AgX, exposição manual e
+  auto exposure por histograma;
+- **Color grading** com contraste, saturação, temperatura/tint, lift/gamma/gain,
+  vinheta e LUT 3D `.cube` opcional;
+- **Shadow mapping CSM** com até 4 cascatas, PCF e bias por cascata;
+- **PBR** metallic-roughness com mapas de base color, metallic-roughness,
+  normal, oclusão e emissive (glTF + `map_bump` do OBJ);
+- **Atmospheric scattering** Rayleigh/Mie com sol dirigindo o céu, ambiente e
+  fog;
+- **SSAO + SSGI** combinados em meio resolução, com seleção de amostras por
+  qualidade;
+- **Bloom** com threshold e blur separável em meio resolução;
+- **Auto exposure** por histograma em compute shader, com exposição mínima/máxima
+  e velocidade de adaptação.
+
+Presets: `low`, `medium`, `high` (padrão) e `ultra`. A demo usa `ultra`; na RX
+5600 XT o demo em 1280x720 fica acima de 500 fps com VSync desligado, deixando
+folga para 1080p a 75-80 fps. O preset `ultra` usa shadow maps de 4096 px por
+cascata; os demais reduzem resolução, cascatas, amostras e efeitos.
+
+A configuração é validada como um lote e aplicada no início do próximo frame.
+A engine compara o lote pedido com o ativo e recria somente os recursos afetados
+(alvos, imagens de sombra, descritores e pipelines). Isso evita estados
+intermediários quando o jogo alterna preset ou liga/desliga um efeito.
 
 ```c
 #include "renderer/renderer.h"
 
-RendererGraphicsSettings graphics = renderer_graphics_settings_default();
-graphics.shadows_enabled = true;
+RendererGraphicsSettings graphics = renderer_graphics_settings_preset(RENDERER_PRESET_ULTRA);
 graphics.shadow_quality = RENDERER_QUALITY_HIGH;
-renderer_set_graphics_settings(&graphics);
+graphics.bloom_intensity = 0.08f;
+renderer_set_graphics_settings(&graphics); // aplica no próximo frame
 ```
 
-Os níveis low, medium e high usam respectivamente 1, 9 e 25 amostras de
-filtragem; o mapa continua com resolução fixa de 2048 pixels. Desativar sombras
-elimina o passe de sombras. A configuração padrão mantém o comportamento anterior
-(ativo, medium). A API também está disponível no WebGPU e no SDK V. Iluminação global, HDR, tone mapping,
-color grading, dispersão atmosférica, oclusão de ambiente, bloom e exposição
-automática ainda não foram implementados por esta etapa.
-
 No SDK V, `Settings.graphics` configura a criação e `egn.set_graphics_settings`
-aplica uma estrutura completa durante a execução. `egn.graphics_settings()`
-retorna os valores atuais. Ambas as chamadas afetam o renderizador global.
+aplica o lote durante a execução. `egn.graphics_settings()` retorna o último
+lote pedido e `egn.active_graphics_settings()` o que está renderizando.
 
 ```v
-mut graphics := egn.GraphicsSettings{ shadow_quality: .high }
+mut graphics := egn.graphics_preset(.ultra)
 mut app := egn.create(egn.Settings{ graphics: graphics })!
-graphics.shadows_enabled = false
+graphics.bloom_intensity = 0.08
+egn.set_graphics_settings(graphics)
+
+// LUT 3D opcional (.cube): carregue uma vez e referencie pelo handle.
+lut := app.load_lut('assets/luts/warm.cube')!
+graphics = egn.graphics_settings()
+graphics.lut_enabled = true
+graphics.lut_texture = lut.id
 egn.set_graphics_settings(graphics)
 ```
 
-### Etapas da atualização gráfica
+Atalhos da demo:
 
-1. **Configuração em lote e sombras:** concluída para Vulkan e WebGPU; a
-   qualidade controla a filtragem, não a resolução do mapa.
-2. **Materiais e iluminação PBR:** em andamento. O WebGPU usa metallic e
-   roughness na iluminação direta; falta o suporte Vulkan e validação visual.
-3. **HDR e pós-processamento:** buffers HDR, tone mapping, color grading e
-   exposição automática.
-4. **Efeitos de espaço de tela:** ambient occlusion e bloom, com controles de
-   qualidade e recursos dimensionados por preset.
-5. **Ambiente e iluminação indireta:** atmospheric scattering e melhoria da
-   iluminação global; a técnica dependerá das capacidades dos backends.
-6. **Integração e validação:** demonstrar presets, trocas em runtime e custos
-   de desempenho; verificar o comportamento visual nos dois backends.
-
-As etapas futuras ainda não estão implementadas. Ao adicionar opções que
-exijam novos recursos GPU, a configuração será aplicada em lote em um limite
-seguro entre quadros.
+| Tecla | Ação |
+| --- | --- |
+| `F3` | cicla preset (low/medium/high/ultra) |
+| `F4` | liga/desliga HDR |
+| `F5` | liga/desliga sombras |
+| `F6` | liga/desliga ambient occlusion |
+| `F7` | liga/desliga global illumination |
+| `F8` | liga/desliga atmosfera |
+| `F9` | liga/desliga bloom |
+| `F10` | liga/desliga auto exposure |
+| `F11` | liga/desliga color grading |
+| `L` | liga/desliga o LUT de exemplo `assets/luts/warm.cube` |
+| `F12` | salva `screenshot.png` |

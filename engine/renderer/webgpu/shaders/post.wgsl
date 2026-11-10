@@ -4,11 +4,25 @@ struct PostConstants {
   lift: vec4f,
   gamma: vec4f,
   gain: vec4f,
+  effects: vec4f,
+  bloom: vec4f,
+  exposureMode: vec4f,
+};
+
+struct ExposureBuffer {
+  exposure: f32,
+  averageLuminance: f32,
+  targetExposure: f32,
+  padding: f32,
 };
 
 @group(0) @binding(0) var sceneTexture: texture_2d<f32>;
 @group(0) @binding(1) var sceneSampler: sampler;
 @group(0) @binding(2) var<uniform> pc: PostConstants;
+@group(0) @binding(3) var effectsTexture: texture_2d<f32>;
+@group(0) @binding(4) var bloomTexture: texture_2d<f32>;
+@group(0) @binding(5) var<storage, read> exposureBuffer: ExposureBuffer;
+@group(0) @binding(6) var lutTexture: texture_3d<f32>;
 
 struct VertexOutput {
   @builtin(position) position: vec4f,
@@ -70,8 +84,15 @@ fn apply_tonemap(colour: vec3f, mapper: i32) -> vec3f {
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   var colour = textureSample(sceneTexture, sceneSampler, input.uv).rgb;
+  let effects = textureSample(effectsTexture, sceneSampler, input.uv);
+  let ao = mix(1.0, effects.a, pc.effects.x);
+  let gi = effects.rgb * pc.effects.y * pc.effects.z;
+  colour = colour * ao + gi;
+  colour += textureSample(bloomTexture, sceneSampler, input.uv).rgb *
+      pc.bloom.x * pc.bloom.y;
 
-  let exposure = pc.exposure_tonemap.x;
+  let exposure = select(pc.exposureMode.y, exposureBuffer.exposure,
+      pc.exposureMode.x > 0.5);
   let mapper = i32(pc.exposure_tonemap.y + 0.5);
   let tone_mapping = pc.exposure_tonemap.z > 0.5;
   let hdr = pc.exposure_tonemap.w > 0.5;
@@ -100,6 +121,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
   colour = mix(vec3f(luma), colour, pc.grading.y);
   colour = (colour - vec3f(0.5)) * pc.grading.x + vec3f(0.5);
   colour = clamp(colour, vec3f(0.0), vec3f(1.0));
+
+  if (pc.gain.w > 0.5 && pc.gamma.w > 0.0) {
+    let graded = textureSample(lutTexture, sceneSampler, clamp(colour, vec3f(0.0), vec3f(1.0))).rgb;
+    colour = mix(colour, graded, clamp(pc.gamma.w, 0.0, 1.0));
+  }
 
   let centered = input.uv * 2.0 - 1.0;
   let vignette = smoothstep(0.35, 1.25, dot(centered, centered));

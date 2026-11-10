@@ -120,6 +120,33 @@ class WebGPURenderer {
   particlePipeline;
   postPipeline;
   postModule;
+  skyPipeline;
+  skyModule;
+  effectsPipeline;
+  effectsModule;
+  bloomModule;
+  exposureModule;
+  effectsLayout;
+  effectsBindGroup;
+  effectsUniformBuffer;
+  effectsSampler;
+  effectsDepthSampler;
+  effectsTexture;
+  effectsView;
+  bloomTextureA;
+  bloomTextureB;
+  bloomViewA;
+  bloomViewB;
+  bloomPipeline;
+  bloomLayout;
+  bloomSampler;
+  bloomBindGroups = [];
+  bloomUniformBuffers = [];
+  exposureBuffer;
+  exposurePipeline;
+  exposureLayout;
+  exposureBindGroup;
+  exposureUniformBuffer;
   hdrTexture;
   hdrView;
   normalTexture;
@@ -133,6 +160,11 @@ class WebGPURenderer {
   textureLayout;
   materialLayout;
   materialSampler;
+  luts = new Map();
+  nextLutHandle = 1000;
+  currentLutHandle = 0;
+  defaultLutTexture;
+  defaultLutView;
   whiteView;
   flatNormalView;
   blackView;
@@ -175,6 +207,10 @@ class WebGPURenderer {
     const spriteModule = device.createShaderModule({ code: shaders.sprite, label: "egn-sprite-shader" });
     const particleModule = device.createShaderModule({ code: shaders.particle, label: "egn-particle-shader" });
     this.postModule = device.createShaderModule({ code: shaders.post, label: "egn-post-shader" });
+    this.skyModule = device.createShaderModule({ code: shaders.sky, label: "egn-sky-shader" });
+    this.effectsModule = device.createShaderModule({ code: shaders.effects, label: "egn-effects-shader" });
+    this.bloomModule = device.createShaderModule({ code: shaders.bloom, label: "egn-bloom-shader" });
+    this.exposureModule = device.createShaderModule({ code: shaders.exposure, label: "egn-exposure-shader" });
     const hdrFormat = "rgba16float";
     const normalFormat = "rgba16float";
     this.frameLayout = device.createBindGroupLayout({
@@ -310,7 +346,7 @@ class WebGPURenderer {
     });
     this.postUniformBuffer = device.createBuffer({
       label: "egn-post-uniforms",
-      size: 5 * 16,
+      size: 8 * 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
     this.postLayout = device.createBindGroupLayout({
@@ -318,7 +354,11 @@ class WebGPURenderer {
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "storage" } },
+        { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "3d" } }
       ]
     });
     this.postPipeline = device.createRenderPipeline({
@@ -327,6 +367,87 @@ class WebGPURenderer {
       vertex: { module: this.postModule, entryPoint: "vs_main" },
       fragment: { module: this.postModule, entryPoint: "fs_main", targets: [{ format }] },
       primitive: { topology: "triangle-list", cullMode: "none" }
+    });
+    this.skyPipeline = device.createRenderPipeline({
+      label: "egn-sky-pipeline",
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this.frameLayout] }),
+      vertex: { module: this.skyModule, entryPoint: "vs_main" },
+      fragment: { module: this.skyModule, entryPoint: "fs_main",
+        targets: [{ format: hdrFormat }, { format: normalFormat }] },
+      primitive: { topology: "triangle-list", cullMode: "none" },
+      depthStencil: { format: "depth32float", depthWriteEnabled: false, depthCompare: "always" }
+    });
+    this.effectsLayout = device.createBindGroupLayout({
+      label: "egn-effects-layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "non-filtering" } },
+        { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }
+      ]
+    });
+    this.effectsSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+    this.effectsDepthSampler = device.createSampler({ magFilter: "nearest", minFilter: "nearest" });
+    this.effectsUniformBuffer = device.createBuffer({
+      label: "egn-effects-uniforms",
+      size: 176,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+    this.effectsPipeline = device.createRenderPipeline({
+      label: "egn-effects-pipeline",
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this.effectsLayout] }),
+      vertex: { module: this.effectsModule, entryPoint: "vs_main" },
+      fragment: { module: this.effectsModule, entryPoint: "fs_main",
+        targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list", cullMode: "none" }
+    });
+    this.bloomLayout = device.createBindGroupLayout({
+      label: "egn-bloom-layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }
+      ]
+    });
+    this.bloomSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+    this.bloomUniformBuffers = [0, 1].map((index) => device.createBuffer({
+      label: `egn-bloom-uniforms-${index}`,
+      size: 32,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    }));
+    this.bloomPipeline = device.createRenderPipeline({
+      label: "egn-bloom-pipeline",
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this.bloomLayout] }),
+      vertex: { module: this.bloomModule, entryPoint: "vs_main" },
+      fragment: { module: this.bloomModule, entryPoint: "fs_main",
+        targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list", cullMode: "none" }
+    });
+    this.exposureLayout = device.createBindGroupLayout({
+      label: "egn-exposure-layout",
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } }
+      ]
+    });
+    this.exposureBuffer = device.createBuffer({
+      label: "egn-exposure-buffer",
+      size: 16,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    });
+    this.device.queue.writeBuffer(this.exposureBuffer, 0, new Float32Array([1, 0.18, 1, 0]));
+    this.exposureUniformBuffer = device.createBuffer({
+      label: "egn-exposure-uniforms",
+      size: 32,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+    this.exposurePipeline = device.createComputePipeline({
+      label: "egn-exposure-pipeline",
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this.exposureLayout] }),
+      compute: { module: this.exposureModule, entryPoint: "main" }
     });
 
     this.createShadowResources();
@@ -413,6 +534,30 @@ class WebGPURenderer {
       })
     };
     this.textures.set(0, this.solidTexture);
+
+    const lutTexture = this.device.createTexture({
+      label: "egn-identity-lut",
+      size: [2, 2, 2],
+      dimension: "3d",
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+    });
+    const lutData = new Uint8Array(2 * 2 * 2 * 4);
+    let cursor = 0;
+    for (let b = 0; b < 2; b++) {
+      for (let g = 0; g < 2; g++) {
+        for (let r = 0; r < 2; r++) {
+          lutData[cursor++] = r * 255;
+          lutData[cursor++] = g * 255;
+          lutData[cursor++] = b * 255;
+          lutData[cursor++] = 255;
+        }
+      }
+    }
+    this.device.queue.writeTexture({ texture: lutTexture }, lutData,
+      { bytesPerRow: 2 * 4, rowsPerImage: 2 }, [2, 2, 2]);
+    this.defaultLutTexture = lutTexture;
+    this.defaultLutView = lutTexture.createView();
   }
   registerBuiltinMeshes() {
     this.registerMesh(1, createCube());
@@ -533,6 +678,55 @@ class WebGPURenderer {
     return { id, data: parsed.data, textureId: mesh.defaultTexture };
   }
 
+  async loadLUT(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`failed to load LUT '${url}': ${response.status}`);
+    const text = await response.text();
+    let size = 0;
+    const values = [];
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#"))
+        continue;
+      if (line.startsWith("LUT_3D_SIZE")) {
+        size = Number.parseInt(line.split(/\s+/)[1] ?? "0", 10);
+        continue;
+      }
+      if (line.startsWith("TITLE") || line.startsWith("DOMAIN") ||
+          line.startsWith("LUT_1D"))
+        continue;
+      const parts = line.split(/\s+/).map(Number);
+      if (parts.length >= 3 && parts.every((value) => Number.isFinite(value))) {
+        values.push(parts[0], parts[1], parts[2]);
+      }
+    }
+
+    if (size < 2 || size > 256 || values.length < size * size * size * 3) {
+      throw new Error(`invalid .cube LUT '${url}'`);
+    }
+
+    const data = new Uint8Array(size * size * size * 4);
+    for (let i = 0; i < size * size * size; i++) {
+      data[i * 4 + 0] = Math.round(Math.max(0, Math.min(1, values[i * 3 + 0])) * 255);
+      data[i * 4 + 1] = Math.round(Math.max(0, Math.min(1, values[i * 3 + 1])) * 255);
+      data[i * 4 + 2] = Math.round(Math.max(0, Math.min(1, values[i * 3 + 2])) * 255);
+      data[i * 4 + 3] = 255;
+    }
+
+    const texture = this.device.createTexture({
+      label: `egn-lut-${this.nextLutHandle}`,
+      size: [size, size, size],
+      dimension: "3d",
+      format: "rgba8unorm",
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+    });
+    this.device.queue.writeTexture({ texture }, data,
+      { bytesPerRow: size * 4, rowsPerImage: size }, [size, size, size]);
+    const handle = this.nextLutHandle++;
+    this.luts.set(handle, { texture, view: texture.createView() });
+    return handle;
+  }
+
   registerMeshData(data) {
     const id = this.nextMeshId++;
     this.registerMesh(id, data);
@@ -603,6 +797,23 @@ class WebGPURenderer {
     this.textures.set(id, resource);
     return resource;
   }
+  lutViewForHandle(handle) {
+    return this.luts.get(handle)?.view ?? this.defaultLutView;
+  }
+  createPostBindGroup() {
+    this.postBindGroup = this.device.createBindGroup({
+      layout: this.postLayout,
+      entries: [
+        { binding: 0, resource: this.hdrView },
+        { binding: 1, resource: this.postSampler },
+        { binding: 2, resource: { buffer: this.postUniformBuffer } },
+        { binding: 3, resource: this.effectsView },
+        { binding: 4, resource: this.bloomViewB },
+        { binding: 5, resource: { buffer: this.exposureBuffer } },
+        { binding: 6, resource: this.lutViewForHandle(this.currentLutHandle) }
+      ]
+    });
+  }
   resize() {
     const dpr = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.floor(this.canvas.clientWidth * dpr));
@@ -636,12 +847,67 @@ class WebGPURenderer {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
     });
     this.normalView = this.normalTexture.createView();
-    this.postBindGroup = this.device.createBindGroup({
-      layout: this.postLayout,
+    this.effectsTexture?.destroy();
+    this.bloomTextureA?.destroy();
+    this.bloomTextureB?.destroy();
+    const halfSize = [Math.max(1, Math.floor(width / 2)), Math.max(1, Math.floor(height / 2))];
+    this.effectsTexture = this.device.createTexture({
+      label: "egn-effects",
+      size: halfSize,
+      format: "rgba16float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    });
+    this.effectsView = this.effectsTexture.createView();
+    this.bloomTextureA = this.device.createTexture({
+      label: "egn-bloom-a",
+      size: halfSize,
+      format: "rgba16float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    });
+    this.bloomTextureB = this.device.createTexture({
+      label: "egn-bloom-b",
+      size: halfSize,
+      format: "rgba16float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    });
+    this.bloomViewA = this.bloomTextureA.createView();
+    this.bloomViewB = this.bloomTextureB.createView();
+    this.createPostBindGroup();
+    this.effectsBindGroup = this.device.createBindGroup({
+      layout: this.effectsLayout,
       entries: [
         { binding: 0, resource: this.hdrView },
-        { binding: 1, resource: this.postSampler },
-        { binding: 2, resource: { buffer: this.postUniformBuffer } }
+        { binding: 1, resource: this.normalView },
+        { binding: 2, resource: this.depthView },
+        { binding: 3, resource: this.effectsSampler },
+        { binding: 4, resource: this.effectsDepthSampler },
+        { binding: 5, resource: { buffer: this.effectsUniformBuffer } }
+      ]
+    });
+    this.bloomBindGroups = [
+      this.device.createBindGroup({
+        layout: this.bloomLayout,
+        entries: [
+          { binding: 0, resource: this.hdrView },
+          { binding: 1, resource: this.bloomSampler },
+          { binding: 2, resource: { buffer: this.bloomUniformBuffers[0] } }
+        ]
+      }),
+      this.device.createBindGroup({
+        layout: this.bloomLayout,
+        entries: [
+          { binding: 0, resource: this.bloomViewA },
+          { binding: 1, resource: this.bloomSampler },
+          { binding: 2, resource: { buffer: this.bloomUniformBuffers[1] } }
+        ]
+      })
+    ];
+    this.exposureBindGroup = this.device.createBindGroup({
+      layout: this.exposureLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.exposureBuffer } },
+        { binding: 1, resource: this.hdrView },
+        { binding: 2, resource: { buffer: this.exposureUniformBuffer } }
       ]
     });
   }
@@ -1113,14 +1379,24 @@ class WebGPURenderer {
     const viewProjection = this.math.mat4.multiply(camera.projection, camera.view);
     data.set(viewProjection, 0);
     data.set([camera.world[12], camera.world[13], camera.world[14], 1], 16);
-    data.set(this.ambient, 20);
     data.set([0, -1, 0, 0], 24);
     data.set([0, 0, 0, 0], 28);
+    let sunDirection = [0, -1, 0];
     if (sun) {
-      const direction = this.math.vec3.normalize([sun.world[8], sun.world[9], sun.world[10]]);
-      data.set([direction[0], direction[1], direction[2], sun.intensity], 24);
+      sunDirection = this.math.vec3.normalize([sun.world[8], sun.world[9], sun.world[10]]);
+      data.set([sunDirection[0], sunDirection[1], sunDirection[2], sun.intensity], 24);
       data.set([sun.color[0], sun.color[1], sun.color[2], 0.68], 28);
     }
+    const day = Math.max(0, Math.min(1, sunDirection[1] * 3 + 0.35));
+    const nightAmbient = [0.020, 0.028, 0.055];
+    const dayAmbient = [0.30, 0.40, 0.58];
+    const ambientScale = day * (0.6 + 0.4 * (settings.atmosphere_rayleigh ?? 1));
+    data.set([
+      nightAmbient[0] + (dayAmbient[0] - nightAmbient[0]) * ambientScale,
+      nightAmbient[1] + (dayAmbient[1] - nightAmbient[1]) * ambientScale,
+      nightAmbient[2] + (dayAmbient[2] - nightAmbient[2]) * ambientScale,
+      (settings.atmosphere_enabled ?? true) ? 0.9 : 1.0
+    ], 20);
     for (let cascade = 0; cascade < SHADOW_CASCADES; cascade++) {
       const matrix = cascades.matrices[cascade] ?? this.math.mat4.identity();
       data.set(matrix, 32 + cascade * 16);
@@ -1135,6 +1411,19 @@ class WebGPURenderer {
       data.set([light.world[12], light.world[13], light.world[14], light.range], 108 + i * 8);
       data.set([light.color[0], light.color[1], light.color[2], light.intensity], 112 + i * 8);
     }
+    data.set(this.math.mat4.inverse(viewProjection), 140);
+    const steps = [6, 10, 16, 24][settings.atmosphere_quality ?? 2] ?? 16;
+    const lightSteps = [1, 2, 3, 4][settings.atmosphere_quality ?? 2] ?? 3;
+    data.set([settings.atmosphere_rayleigh ?? 1, settings.atmosphere_mie ?? 0.0035,
+      settings.atmosphere_turbidity ?? 2.4, settings.atmosphere_mie_anisotropy ?? 0.76], 156);
+    data.set([settings.atmosphere_sun_intensity ?? 20, steps, lightSteps,
+      (settings.atmosphere_enabled ?? true) ? 1 : 0], 160);
+    data.set([settings.fog_density ?? 0.008, settings.fog_height_falloff ?? 0.12,
+      (settings.fog_enabled ?? true) ? 1 : 0, 0], 164);
+    const sunColor = sun?.color ?? [1, 1, 1];
+    data.set([0.20 * (0.35 + 0.65 * day) + sunColor[0] * 0.05,
+      0.28 * (0.35 + 0.65 * day) + sunColor[1] * 0.05,
+      0.36 * (0.35 + 0.65 * day) + sunColor[2] * 0.05, 0], 168);
     this.device.queue.writeBuffer(gpu.buffer, 0, data);
     return gpu;
   }
@@ -1347,6 +1636,11 @@ class WebGPURenderer {
       });
       pass.setViewport(x, y, width, height, 0, 1);
       pass.setScissorRect(x, y, width, height);
+      if (cam.domain === 0 && (this.graphicsSettings?.atmosphere_enabled ?? true)) {
+        pass.setPipeline(this.skyPipeline);
+        pass.setBindGroup(0, frameBindGroups.get(cam));
+        pass.draw(3);
+      }
       pass.setPipeline(this.mainPipeline);
       pass.setBindGroup(0, frameBindGroups.get(cam));
       for (const item of scene.models) {
@@ -1408,6 +1702,86 @@ class WebGPURenderer {
       first = false;
     }
 
+    const settings = this.graphicsSettings ?? {};
+    if (camera && (settings.ao_enabled || settings.gi_enabled)) {
+      const viewProjection = this.math.mat4.multiply(camera.projection, camera.view);
+      const quality = Math.max(settings.ao_quality ?? 2, settings.gi_quality ?? 2);
+      const samples = [8, 12, 16, 24][quality] ?? 16;
+      const effectsData = new Float32Array(44);
+      effectsData.set(this.math.mat4.inverse(viewProjection), 0);
+      effectsData.set(viewProjection, 16);
+      effectsData.set([camera.world[12], camera.world[13], camera.world[14], 1], 32);
+      effectsData.set([settings.ao_radius ?? 1, settings.ao_intensity ?? 0.7,
+        settings.gi_intensity ?? 0.55, settings.gi_distance ?? 12], 36);
+      effectsData.set([samples, this.effectsTexture.width, this.effectsTexture.height,
+        (settings.ao_enabled ? 1 : 0) | (settings.gi_enabled ? 2 : 0)], 40);
+      this.device.queue.writeBuffer(this.effectsUniformBuffer, 0, effectsData);
+
+      const effectsPass = encoder.beginRenderPass({
+        label: "egn-effects-pass",
+        colorAttachments: [{
+          view: this.effectsView,
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: "clear",
+          storeOp: "store"
+        }]
+      });
+      effectsPass.setPipeline(this.effectsPipeline);
+      effectsPass.setBindGroup(0, this.effectsBindGroup);
+      effectsPass.draw(3);
+      effectsPass.end();
+    }
+
+    if (settings.bloom_enabled && this.bloomBindGroups.length === 2) {
+      const quality = settings.bloom_quality ?? 2;
+      const radius = [2, 3, 4, 5][quality] ?? 4;
+      const halfWidth = this.bloomTextureA.width;
+      const halfHeight = this.bloomTextureA.height;
+      const horizontal = new Float32Array([
+        1, 0, settings.bloom_threshold ?? 1.1, 0,
+        1 / halfWidth, 1 / halfHeight, radius, 1
+      ]);
+      const vertical = new Float32Array([
+        0, 1, 0, 0,
+        1 / halfWidth, 1 / halfHeight, radius, 0
+      ]);
+      this.device.queue.writeBuffer(this.bloomUniformBuffers[0], 0, horizontal);
+      this.device.queue.writeBuffer(this.bloomUniformBuffers[1], 0, vertical);
+
+      for (let passIndex = 0; passIndex < 2; passIndex++) {
+        const bloomPass = encoder.beginRenderPass({
+          label: `egn-bloom-${passIndex}`,
+          colorAttachments: [{
+            view: passIndex === 0 ? this.bloomViewA : this.bloomViewB,
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+            loadOp: "clear",
+            storeOp: "store"
+          }]
+        });
+        bloomPass.setPipeline(this.bloomPipeline);
+        bloomPass.setBindGroup(0, this.bloomBindGroups[passIndex]);
+        bloomPass.draw(3);
+        bloomPass.end();
+      }
+    }
+
+    if (settings.auto_exposure_enabled) {
+      const quality = settings.auto_exposure_quality ?? 2;
+      const grid = [64, 96, 128, 192][quality] ?? 128;
+      const exposureData = new Float32Array([
+        dt, settings.auto_exposure_speed ?? 1.5,
+        settings.auto_exposure_min_ev ?? -6,
+        settings.auto_exposure_max_ev ?? 6,
+        grid, 0, 1, 0
+      ]);
+      this.device.queue.writeBuffer(this.exposureUniformBuffer, 0, exposureData);
+      const computePass = encoder.beginComputePass({ label: "egn-exposure" });
+      computePass.setPipeline(this.exposurePipeline);
+      computePass.setBindGroup(0, this.exposureBindGroup);
+      computePass.dispatchWorkgroups(1);
+      computePass.end();
+    }
+
     this.updatePostUniforms();
     const postPass = encoder.beginRenderPass({
       label: "egn-post-pass",
@@ -1432,11 +1806,16 @@ class WebGPURenderer {
       this.shadowSize = size;
       this.createShadowResources();
     }
+    const lut = settings?.lut_enabled ? (settings.lut_texture ?? 0) : 0;
+    if (lut !== this.currentLutHandle) {
+      this.currentLutHandle = lut;
+      if (this.hdrView) this.createPostBindGroup();
+    }
   }
   updatePostUniforms() {
     const s = this.graphicsSettings ?? {};
     const grading = !!s.color_grading_enabled;
-    const data = new Float32Array(20);
+    const data = new Float32Array(32);
     data[0] = Math.pow(2, s.exposure_compensation ?? 0);
     data[1] = s.tone_mapper ?? 1;
     data[2] = s.tone_mapping_enabled ?? true ? 1 : 0;
@@ -1457,15 +1836,33 @@ class WebGPURenderer {
     data[17] = grading ? (s.gain_g ?? 1) : 1;
     data[18] = grading ? (s.gain_b ?? 1) : 1;
     data[19] = s.lut_enabled ? 1 : 0;
+    data[20] = s.ao_enabled ? 1 : 0;
+    data[21] = s.gi_enabled ? 1 : 0;
+    data[22] = s.gi_intensity ?? 0.55;
+    data[23] = s.ao_intensity ?? 0.7;
+    data[24] = s.bloom_enabled ? 1 : 0;
+    data[25] = s.bloom_intensity ?? 0.055;
+    data[26] = s.bloom_threshold ?? 1.1;
+    data[27] = s.bloom_radius ?? 0.55;
+    data[28] = s.auto_exposure_enabled ? 1 : 0;
+    data[29] = Math.pow(2, s.exposure_compensation ?? 0);
+    data[30] = 0;
+    data[31] = 0;
     this.device.queue.writeBuffer(this.postUniformBuffer, 0, data);
   }
   destroy() {
     this.depthTexture?.destroy();
     this.hdrTexture?.destroy();
     this.normalTexture?.destroy();
+    this.effectsTexture?.destroy();
+    this.bloomTextureA?.destroy();
+    this.bloomTextureB?.destroy();
     this.flatNormalTexture?.destroy();
     this.blackTexture?.destroy();
     this.postUniformBuffer?.destroy();
+    for (const buffer of this.bloomUniformBuffers) buffer.destroy();
+    this.exposureUniformBuffer?.destroy();
+    this.exposureBuffer?.destroy();
     this.shadowTexture?.destroy();
     for (const buffer of this.shadowGlobals) buffer.destroy();
     if (this.scratch) this.module._free(this.scratch);

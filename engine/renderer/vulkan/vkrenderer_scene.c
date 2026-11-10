@@ -4,6 +4,7 @@
 #include "vkrenderer_skin.h"
 #include "vkrenderer_lighting.h"
 #include "vkrenderer_particles.h"
+#include "vkrenderer_sky.h"
 #include "shader/vkrenderer_shader.h"
 #include "scene/scene_internal.h"
 #include "core/logger.h"
@@ -753,6 +754,31 @@ b8 vkrenderer_scene_prepare(VkContext *ctx, VkRendererCommandBuffer *command_buf
     }
   }
 
+  if (graphics.atmosphere_enabled)
+  {
+    f32 sun_elevation = lighting.sun_direction.y;
+    f32 day = clampf(sun_elevation * 3.0f + 0.35f, 0.0f, 1.0f);
+    vec3 night_ambient = vec3_create(0.020f, 0.028f, 0.055f);
+    vec3 day_ambient = vec3_create(0.30f, 0.40f, 0.58f);
+    day_ambient = vec3_mul_scalar(day_ambient, 0.6f + 0.4f * graphics.atmosphere_rayleigh);
+    vec3 ambient = vec3_add(night_ambient,
+                            vec3_mul_scalar(vec3_sub(day_ambient, night_ambient), day));
+    lighting.ambient = vec4_create(ambient.x, ambient.y, ambient.z, 0.9f);
+
+    vec3 sun_tint = vec3_create(lighting.sun_color.x, lighting.sun_color.y, lighting.sun_color.z);
+    vec3 fog_colour = vec3_add(vec3_mul_scalar(sun_tint, 0.55f),
+                               vec3_mul_scalar(ambient, 0.65f));
+    lighting.fog_color = vec4_create(fog_colour.x, fog_colour.y, fog_colour.z, 0.0f);
+  }
+  else
+  {
+    lighting.fog_color = vec4_create(lighting.ambient.x, lighting.ambient.y,
+                                     lighting.ambient.z, 0.0f);
+  }
+
+  lighting.fog_params = vec4_create(graphics.fog_density, graphics.fog_height_falloff,
+                                    graphics.fog_enabled ? 1.0f : 0.0f, 0.0f);
+
   vkrenderer_lighting_write(ctx, &lighting);
   vkrenderer_skin_barrier(ctx, command_buffer);
 
@@ -1072,6 +1098,22 @@ static b8 primary_camera_shadow_info(VkContext *ctx, mat4 *out_view, f32 *out_fo
   }
 
   return false;
+}
+
+b8 vkrenderer_scene_primary_camera(VkContext *ctx, mat4 *out_view_projection,
+                                   vec3 *out_position)
+{
+  mat4 view;
+  f32 fov, aspect, near_clip, far_clip;
+  vec3 position;
+  if (!primary_camera_shadow_info(ctx, &view, &fov, &aspect, &near_clip,
+                                  &far_clip, &position))
+    return false;
+
+  mat4 projection = mat4_perspective(fov, aspect, near_clip, far_clip);
+  *out_view_projection = mat4_mul(projection, view);
+  *out_position = position;
+  return true;
 }
 
 static void compute_shadow_cascades(const RendererGraphicsSettings *settings,
@@ -1398,6 +1440,10 @@ void vkrenderer_scene_render(VkContext *ctx, VkRendererCommandBuffer *command_bu
     }
 
     mat4 view_projection = mat4_mul(projection, view);
+
+    if (camera->domain == EGN_RENDER_3D &&
+        renderer_get_active_graphics_settings().atmosphere_enabled)
+      vkrenderer_sky_render(ctx, command_buffer, mat4_inverse(view_projection));
 
     vkrenderer_shader_bind(ctx, &ctx->shader_3d, command_buffer->handle);
 

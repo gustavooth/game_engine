@@ -26,5 +26,9 @@ void vkrenderer_scene_render_shadows(VkContext *ctx, VkRendererCommandBuffer *co
  */
 void vkrenderer_scene_render(VkContext *ctx, VkRendererCommandBuffer *command_buffer);
 
+/** Returns the view-projection of the first 3D perspective camera. */
+b8 vkrenderer_scene_primary_camera(VkContext *ctx, mat4 *out_view_projection,
+                                   vec3 *out_position);
+
 /** Frees renderer-side per-model animation state. */
 void vkrenderer_scene_shutdown(VkContext *ctx);

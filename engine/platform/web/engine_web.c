@@ -172,10 +172,18 @@ RendererGraphicsSettings renderer_get_active_graphics_settings(void)
   return active_graphics_settings;
 }
 
+EM_ASYNC_JS(u32, web_load_lut, (const char *path), {
+  try {
+    return await globalThis.egnWebRenderer.loadLUT(UTF8ToString(path));
+  } catch (error) {
+    console.error(error);
+    return 0;
+  }
+});
+
 u32 renderer_lut_load(const char *path)
 {
-  (void)path;
-  return 0;
+  return path ? web_load_lut(path) : 0;
 }
 
 b8 engine_create_instance(EngineSettings *settings, void **out)

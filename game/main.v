@@ -5,6 +5,7 @@ import egn {
 	Animation,
 	Camera,
 	Canvas,
+	GraphicsPreset,
 	CharacterController,
 	Collider,
 	Color,
@@ -24,9 +25,12 @@ import egn {
 	Vec3,
 	Viewport,
 	create,
+	graphics_preset,
+	graphics_settings,
 	log_error,
 	log_info,
 	new_egn_string,
+	set_graphics_settings,
 	rgb,
 	rgba,
 	vec2,
@@ -111,10 +115,21 @@ fn (counter FpsCounter) show(value int) {
 //   Esc ......... quit
 //   F1 .......... toggle vsync
 //   F2 .......... cycle FPS cap (off / 60 / 120 / 144)
+//   F3 .......... cycle graphics preset (low/medium/high/ultra)
+//   F4 .......... toggle HDR
+//   F5 .......... toggle shadows
+//   F6 .......... toggle ambient occlusion
+//   F7 .......... toggle global illumination
+//   F8 .......... toggle atmosphere
+//   F9 .......... toggle bloom
+//   F10 ......... toggle auto exposure
+//   F11 ......... toggle color grading
+//   L ........... toggle warm 3D LUT
 //   F12 ......... save a screenshot
 //   LMB ......... (re)capture the pointer
 
 fn main() {
+	mut graphics := graphics_preset(.ultra)
 	mut app := create(Settings{
 		title:      'EGN - FPS / Physics / Particles'
 		width:      1280
@@ -123,6 +138,7 @@ fn main() {
 		y:          100
 		vsync:      false
 		target_fps: 0
+		graphics:   graphics
 	}) or {
 		eprintln('failed to start the engine: ${err}')
 		exit(1)
@@ -139,6 +155,10 @@ fn main() {
 	}
 	checker_texture := app.load_texture('assets/textures/checker.png') or {
 		log_error('could not load checker texture: ${err}')
+		Texture{}
+	}
+	warm_lut := app.load_lut('assets/luts/warm.cube') or {
+		log_error('could not load warm LUT: ${err}')
 		Texture{}
 	}
 	particle_texture := app.load_texture('assets/textures/particle.png') or {
@@ -444,6 +464,8 @@ fn main() {
 	mut fps_frame_count := 0
 	mut want_lock := true
 
+	mut preset_index := 3
+	presets := [GraphicsPreset.low, .medium, .high, .ultra]
 	for app.should_run() {
 
 		// Keep trying until the compositor grants the pointer lock (it needs
@@ -473,6 +495,67 @@ fn main() {
 			} else {
 				log_info('target fps: ${cap}')
 			}
+		}
+		if app.key_pressed(.f3) {
+			preset_index = (preset_index + 1) % presets.len
+			graphics = graphics_preset(presets[preset_index])
+			set_graphics_settings(graphics)
+			log_info('graphics preset changed')
+		}
+		if app.key_pressed(.f4) {
+			mut g := graphics_settings()
+			g.hdr_enabled = !g.hdr_enabled
+			set_graphics_settings(g)
+			log_info('HDR: ${g.hdr_enabled}')
+		}
+		if app.key_pressed(.f5) {
+			mut g := graphics_settings()
+			g.shadows_enabled = !g.shadows_enabled
+			set_graphics_settings(g)
+			log_info('shadows: ${g.shadows_enabled}')
+		}
+		if app.key_pressed(.f6) {
+			mut g := graphics_settings()
+			g.ao_enabled = !g.ao_enabled
+			set_graphics_settings(g)
+			log_info('ambient occlusion: ${g.ao_enabled}')
+		}
+		if app.key_pressed(.f7) {
+			mut g := graphics_settings()
+			g.gi_enabled = !g.gi_enabled
+			set_graphics_settings(g)
+			log_info('global illumination: ${g.gi_enabled}')
+		}
+		if app.key_pressed(.f8) {
+			mut g := graphics_settings()
+			g.atmosphere_enabled = !g.atmosphere_enabled
+			set_graphics_settings(g)
+			log_info('atmosphere: ${g.atmosphere_enabled}')
+		}
+		if app.key_pressed(.f9) {
+			mut g := graphics_settings()
+			g.bloom_enabled = !g.bloom_enabled
+			set_graphics_settings(g)
+			log_info('bloom: ${g.bloom_enabled}')
+		}
+		if app.key_pressed(.f10) {
+			mut g := graphics_settings()
+			g.auto_exposure_enabled = !g.auto_exposure_enabled
+			set_graphics_settings(g)
+			log_info('auto exposure: ${g.auto_exposure_enabled}')
+		}
+		if app.key_pressed(.f11) {
+			mut g := graphics_settings()
+			g.color_grading_enabled = !g.color_grading_enabled
+			set_graphics_settings(g)
+			log_info('color grading: ${g.color_grading_enabled}')
+		}
+		if app.key_pressed(.l) && warm_lut.is_valid() {
+			mut g := graphics_settings()
+			g.lut_enabled = !g.lut_enabled
+			g.lut_texture = warm_lut.id
+			set_graphics_settings(g)
+			log_info('warm LUT: ${g.lut_enabled}')
 		}
 		if app.key_pressed(.f12) {
 			app.screenshot('screenshot.png')

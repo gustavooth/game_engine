@@ -18,6 +18,11 @@ struct Globals {
   shadowParams: vec4f,
   pointParams: vec4f,
   pointLights: array<PointLight, 8>,
+  inverseViewProjection: mat4x4f,
+  atmosphere: vec4f,
+  atmosphere2: vec4f,
+  fogParams: vec4f,
+  fogColor: vec4f,
 };
 
 struct ObjectUniforms {
@@ -231,5 +236,15 @@ fn fs_main(input: VertexOutput) -> FragmentOutput {
     }
   }
 
-  return FragmentOutput(vec4f(color + emissive, base.a), vec4f(normal, 1.0));
+  color += emissive;
+
+  if (globals.fogParams.z > 0.5) {
+    let distanceToCamera = length(globals.cameraPosition.xyz - input.worldPosition);
+    let density = globals.fogParams.x *
+        exp(-globals.fogParams.y * max(input.worldPosition.y, 0.0));
+    let fog = clamp(1.0 - exp(-density * distanceToCamera), 0.0, 1.0);
+    color = mix(color, globals.fogColor.rgb, fog);
+  }
+
+  return FragmentOutput(vec4f(color, base.a), vec4f(normal, 1.0));
 }
