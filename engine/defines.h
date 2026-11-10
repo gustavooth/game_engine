@@ -1,16 +1,22 @@
 #pragma once
 
+// Fixed-width types come from the platform's <stdint.h> so they stay
+// compatible with other compilers/languages (including the V SDK) that also
+// use the C standard types.
+#include <stdint.h>
+#include <stdbool.h>
+
 // Unsigned int types.
-typedef unsigned char u8;
-typedef unsigned short u16;
-typedef unsigned int u32;
-typedef unsigned long long u64;
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
 
 // Signed int types.
-typedef signed char i8;
-typedef signed short i16;
-typedef signed int i32;
-typedef signed long long i64;
+typedef int8_t i8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
 
 // Floating point types
 typedef float f32;
@@ -18,10 +24,7 @@ typedef double f64;
 
 // Boolean types
 typedef _Bool b8;
-typedef int b32;
-
-#define true 1
-#define false 0
+typedef int32_t b32;
 
 // Properly define static assertions.
 #if defined(__clang__) || defined(__gcc__)

@@ -1,6 +1,7 @@
 #include "vkrenderer_swapchain.h"
 #include "core/logger.h"
 #include "core/memo.h"
+#include "renderer/renderer.h"
 #include "vkrenderer_image.h"
 
 b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapchain);
@@ -29,7 +30,7 @@ b8 vkrenderer_swapchain_acquire_next_image_index(VkContext *ctx, VkRendererSwapc
 
   if (result == VK_ERROR_OUT_OF_DATE_KHR)
   {
-    vkrenderer_swapchain_recreate(ctx, ctx->framebuffer_width, ctx->framebuffer_height, swapchain);
+    renderer_resize(ctx->framebuffer_width, ctx->framebuffer_height);
     return false;
   }
   else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
@@ -55,7 +56,7 @@ b8 vkrenderer_swapchain_present(VkContext *ctx, VkRendererSwapchain *swapchain, 
 
   if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
   {
-    vkrenderer_swapchain_recreate(ctx, ctx->framebuffer_width, ctx->framebuffer_width, swapchain);
+    renderer_resize(ctx->framebuffer_width, ctx->framebuffer_height);
     return false;
   }
   else if (result != VK_SUCCESS)
@@ -70,8 +71,6 @@ b8 vkrenderer_swapchain_present(VkContext *ctx, VkRendererSwapchain *swapchain, 
 b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapchain)
 {
   EGNDEBUG("VKRENDERER Creating swapchain...");
-
-  VkExtent2D swapchain_extent = {width, height};
 
   VkRendererSwapchainSupport support = ctx->device.swapchain_support;
 
@@ -92,26 +91,22 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
     out_swapchain->image_format = support.formats[0];
   }
 
+  // FIFO (vsync) keeps the game in sync with the display and prevents the
+  // unbounded frame rate that MAILBOX can produce on fast GPUs.
   VkPresentModeKHR present_mode = VK_PRESENT_MODE_FIFO_KHR;
-  for (u32 i = 0; i < support.present_mode_count; i++)
-  {
-    if (support.present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
-    {
-      present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
-      break;
-    }
-  }
 
   VkExtent2D min = support.capabilities.minImageExtent;
   VkExtent2D max = support.capabilities.maxImageExtent;
   width = EGNCLAMP(width, min.width, max.width);
   height = EGNCLAMP(height, min.height, max.height);
 
+  VkExtent2D swapchain_extent = {width, height};
+
   u32 image_count = support.capabilities.minImageCount + 1;
   if (support.capabilities.maxImageCount > 0 && image_count > support.capabilities.maxImageCount)
     image_count = support.capabilities.maxImageCount;
 
-  out_swapchain->max_frame_in_flight = image_count - 1;
+  out_swapchain->max_frame_in_flight = image_count > 1 ? image_count - 1 : 1;
 
   VkSwapchainCreateInfoKHR swapchain_info = {VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
   swapchain_info.surface = ctx->surface;
@@ -121,6 +116,8 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
   swapchain_info.imageExtent = swapchain_extent;
   swapchain_info.imageArrayLayers = 1;
   swapchain_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  if (support.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
+    swapchain_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
   if (ctx->device.queue_indexes.graphics_family_index != ctx->device.queue_indexes.present_family_index)
   {
@@ -183,7 +180,19 @@ void destroy(VkContext *ctx, VkRendererSwapchain *swapchain)
 {
   vkDeviceWaitIdle(ctx->device.handle);
 
-  vkDestroySwapchainKHR(ctx->device.handle, swapchain->handle, ctx->allocator);
+  if (swapchain->views)
+  {
+    for (u32 i = 0; i < swapchain->image_count; i++)
+      vkDestroyImageView(ctx->device.handle, swapchain->views[i], ctx->allocator);
+    MEMOFREE(swapchain->views);
+  }
+
+  if (swapchain->images)
+    MEMOFREE(swapchain->images);
+
+  if (swapchain->handle)
+    vkDestroySwapchainKHR(ctx->device.handle, swapchain->handle, ctx->allocator);
+
   vkrenderer_destroy_image(ctx, &swapchain->depth_attachment);
 
   MEMOZERO(swapchain, sizeof(VkRendererSwapchain));

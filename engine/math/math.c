@@ -1,9 +1,20 @@
 #include "math.h"
 
-#include "platform/platform.h"
 #include <math.h>
 #include <stdlib.h>
+#include <time.h>
+
 static b8 rand_seeded = false;
+
+static void egn_seed_random(void)
+{
+  if (!rand_seeded)
+  {
+    srand((u32)time(NULL));
+    rand_seeded = true;
+  }
+}
+
 /**
  * Note that these are here in order to prevent having to import the
  * entire <math.h> everywhere.
@@ -34,27 +45,37 @@ f32 egnabs(f32 x)
 }
 i32 egnrandom()
 {
-  if (!rand_seeded)
-  {
-    srand((u32)platform_get_absolute_time());
-    rand_seeded = true;
-  }
+  egn_seed_random();
   return rand();
 }
 i32 egnrandom_in_range(i32 min, i32 max)
 {
-  if (!rand_seeded)
+  if (min > max)
   {
-    srand((u32)platform_get_absolute_time());
-    rand_seeded = true;
+    i32 tmp = min;
+    min = max;
+    max = tmp;
   }
-  return (rand() % (max - min + 1)) + min;
+
+  egn_seed_random();
+
+  i64 span = (i64)max - (i64)min + 1;
+  i64 value = (i64)min + (i64)((u64)rand() % (u64)span);
+  return (i32)value;
 }
 f32 egnfrandom()
 {
-  return (float)egnrandom() / (f32)RAND_MAX;
+  egn_seed_random();
+  return (f32)rand() / (f32)RAND_MAX;
 }
 f32 egnfrandom_in_range(f32 min, f32 max)
 {
-  return min + ((float)egnrandom() / ((f32)RAND_MAX / (max - min)));
+  if (min > max)
+  {
+    f32 tmp = min;
+    min = max;
+    max = tmp;
+  }
+
+  return min + (max - min) * egnfrandom();
 }

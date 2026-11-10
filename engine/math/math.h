@@ -3,18 +3,20 @@
 #include "math_types.h"
 #include "core/memo.h"
 
-#define EGN_PI 3.14159265358979323846f
-#define EGN_PI_2 2.0f * EGN_PI
-#define EGN_HALF_PI 0.5f * EGN_PI
-#define EGN_QUARTER_PI 0.25f * EGN_PI
-#define EGN_ONE_OVER_PI 1.0f / EGN_PI
-#define EGN_ONE_OVER_TWO_PI 1.0f / EGN_PI_2
-#define EGN_SQRT_TWO 1.41421356237309504880f
-#define EGN_SQRT_THREE 1.73205080756887729352f
-#define EGN_SQRT_ONE_OVER_TWO 0.70710678118654752440f
-#define EGN_SQRT_ONE_OVER_THREE 0.57735026918962576450f
-#define EGN_DEG2RAD_MULTIPLIER EGN_PI / 180.0f
-#define EGN_RAD2DEG_MULTIPLIER 180.0f / EGN_PI
+#define EGN_PI (3.14159265358979323846f)
+#define EGN_TWO_PI (2.0f * EGN_PI)
+/* Kept for backwards compatibility: EGN_PI_2 means 2*PI (tau). */
+#define EGN_PI_2 EGN_TWO_PI
+#define EGN_HALF_PI (0.5f * EGN_PI)
+#define EGN_QUARTER_PI (0.25f * EGN_PI)
+#define EGN_ONE_OVER_PI (1.0f / EGN_PI)
+#define EGN_ONE_OVER_TWO_PI (1.0f / EGN_TWO_PI)
+#define EGN_SQRT_TWO (1.41421356237309504880f)
+#define EGN_SQRT_THREE (1.73205080756887729352f)
+#define EGN_SQRT_ONE_OVER_TWO (0.70710678118654752440f)
+#define EGN_SQRT_ONE_OVER_THREE (0.57735026918962576450f)
+#define EGN_DEG2RAD_MULTIPLIER (EGN_PI / 180.0f)
+#define EGN_RAD2DEG_MULTIPLIER (180.0f / EGN_PI)
 
 // The multiplier to convert seconds to milliseconds.
 #define EGN_SEC_TO_MS_MULTIPLIER 1000.0f
@@ -22,8 +24,8 @@
 #define EGN_MS_TO_SEC_MULTIPLIER 0.001f
 // A huge number that should be larger than any valid number used.
 #define EGN_INFINITY 1e30f
-// Smallest positive number where 1.0 + FLOAT_EPSILON != 0
-#define EGN_FLOAT_EPSILON 1.192092896e-07f
+// Smallest positive number where 1.0 + FLOAT_EPSILON != 1.0
+#define EGN_FLOAT_EPSILON (1.192092896e-07f)
 
 EGNAPI f32 egnsin(f32 x);
 EGNAPI f32 egncos(f32 x);
@@ -123,6 +125,11 @@ EGNINLINE f32 vec2_length(vec2 vector)
 EGNINLINE void vec2_normalize(vec2 *vector)
 {
   const f32 length = vec2_length(*vector);
+  if (length <= EGN_FLOAT_EPSILON)
+  {
+    *vector = vec2_zero();
+    return;
+  }
   vector->x /= length;
   vector->y /= length;
 }
@@ -264,6 +271,11 @@ EGNINLINE f32 vec3_length(vec3 vector)
 EGNINLINE void vec3_normalize(vec3 *vector)
 {
   const f32 length = vec3_length(*vector);
+  if (length <= EGN_FLOAT_EPSILON)
+  {
+    *vector = vec3_zero();
+    return;
+  }
   vector->x /= length;
   vector->y /= length;
   vector->z /= length;
@@ -292,7 +304,7 @@ EGNINLINE vec3 vec3_cross(vec3 vector_0, vec3 vector_1)
       vector_0.x * vector_1.y - vector_0.y * vector_1.x};
 }
 
-EGNINLINE const b8 vec3_compare(vec3 vector_0, vec3 vector_1, f32 tolerance)
+EGNINLINE b8 vec3_compare(vec3 vector_0, vec3 vector_1, f32 tolerance)
 {
   if (egnabs(vector_0.x - vector_1.x) > tolerance)
   {
@@ -398,6 +410,11 @@ EGNINLINE f32 vec4_length(vec4 vector)
 EGNINLINE void vec4_normalize(vec4 *vector)
 {
   const f32 length = vec4_length(*vector);
+  if (length <= EGN_FLOAT_EPSILON)
+  {
+    *vector = vec4_zero();
+    return;
+  }
   vector->x /= length;
   vector->y /= length;
   vector->z /= length;
@@ -441,22 +458,19 @@ EGNINLINE mat4 mat4_identity()
  */
 EGNINLINE mat4 mat4_mul(mat4 matrix_0, mat4 matrix_1)
 {
-  mat4 out_matrix = mat4_identity();
-  const f32 *m1_ptr = matrix_0.data;
-  const f32 *m2_ptr = matrix_1.data;
-  f32 *dst_ptr = out_matrix.data;
-  for (i32 i = 0; i < 4; ++i)
+  mat4 out_matrix;
+  const f32 *m0 = matrix_0.data;
+  const f32 *m1 = matrix_1.data;
+  for (i32 col = 0; col < 4; ++col)
   {
-    for (i32 j = 0; j < 4; ++j)
+    for (i32 row = 0; row < 4; ++row)
     {
-      *dst_ptr =
-          m1_ptr[0] * m2_ptr[0 + j] +
-          m1_ptr[1] * m2_ptr[4 + j] +
-          m1_ptr[2] * m2_ptr[8 + j] +
-          m1_ptr[3] * m2_ptr[12 + j];
-      dst_ptr++;
+      out_matrix.data[col * 4 + row] =
+          m0[0 * 4 + row] * m1[col * 4 + 0] +
+          m0[1 * 4 + row] * m1[col * 4 + 1] +
+          m0[2 * 4 + row] * m1[col * 4 + 2] +
+          m0[3 * 4 + row] * m1[col * 4 + 3];
     }
-    m1_ptr += 4;
   }
   return out_matrix;
 }
@@ -474,16 +488,20 @@ EGNINLINE mat4 mat4_mul(mat4 matrix_0, mat4 matrix_1)
  */
 EGNINLINE mat4 mat4_orthographic(f32 left, f32 right, f32 bottom, f32 top, f32 near_clip, f32 far_clip)
 {
+  if (egnabs(near_clip - far_clip) <= EGN_FLOAT_EPSILON)
+    return mat4_identity();
+
   mat4 out_matrix = mat4_identity();
   f32 lr = 1.0f / (left - right);
   f32 bt = 1.0f / (bottom - top);
   f32 nf = 1.0f / (near_clip - far_clip);
   out_matrix.data[0] = -2.0f * lr;
   out_matrix.data[5] = -2.0f * bt;
-  out_matrix.data[10] = 2.0f * nf;
+  /* Vulkan clip space uses a [0, 1] depth range. */
+  out_matrix.data[10] = nf;
   out_matrix.data[12] = (left + right) * lr;
   out_matrix.data[13] = (top + bottom) * bt;
-  out_matrix.data[14] = (far_clip + near_clip) * nf;
+  out_matrix.data[14] = near_clip * nf;
   return out_matrix;
 }
 /**
@@ -498,13 +516,19 @@ EGNINLINE mat4 mat4_orthographic(f32 left, f32 right, f32 bottom, f32 top, f32 n
 EGNINLINE mat4 mat4_perspective(f32 fov_radians, f32 aspect_ratio, f32 near_clip, f32 far_clip)
 {
   f32 half_tan_fov = egntan(fov_radians * 0.5f);
+  if (egnabs(half_tan_fov) <= EGN_FLOAT_EPSILON ||
+      egnabs(aspect_ratio) <= EGN_FLOAT_EPSILON ||
+      egnabs(near_clip - far_clip) <= EGN_FLOAT_EPSILON)
+    return mat4_identity();
+
   mat4 out_matrix;
   MEMOZERO(out_matrix.data, sizeof(f32) * 16);
   out_matrix.data[0] = 1.0f / (aspect_ratio * half_tan_fov);
   out_matrix.data[5] = 1.0f / half_tan_fov;
-  out_matrix.data[10] = -((far_clip + near_clip) / (far_clip - near_clip));
+  /* Vulkan clip space uses a [0, 1] depth range. */
+  out_matrix.data[10] = far_clip / (near_clip - far_clip);
   out_matrix.data[11] = -1.0f;
-  out_matrix.data[14] = -((2.0f * far_clip * near_clip) / (far_clip - near_clip));
+  out_matrix.data[14] = (far_clip * near_clip) / (near_clip - far_clip);
   return out_matrix;
 }
 /**
@@ -523,8 +547,15 @@ EGNINLINE mat4 mat4_look_at(vec3 position, vec3 target, vec3 up)
   z_axis.x = target.x - position.x;
   z_axis.y = target.y - position.y;
   z_axis.z = target.z - position.z;
+  if (vec3_length(z_axis) <= EGN_FLOAT_EPSILON)
+    return mat4_identity();
   z_axis = vec3_normalized(z_axis);
-  vec3 x_axis = vec3_normalized(vec3_cross(z_axis, up));
+
+  vec3 x_axis = vec3_cross(z_axis, up);
+  if (vec3_length(x_axis) <= EGN_FLOAT_EPSILON)
+    return mat4_identity();
+  x_axis = vec3_normalized(x_axis);
+
   vec3 y_axis = vec3_cross(x_axis, z_axis);
   out_matrix.data[0] = x_axis.x;
   out_matrix.data[1] = y_axis.x;
@@ -610,7 +641,10 @@ EGNINLINE mat4 mat4_inverse(mat4 matrix)
   o[1] = (t1 * m[1] + t6 * m[9] + t9 * m[13]) - (t0 * m[1] + t7 * m[9] + t8 * m[13]);
   o[2] = (t2 * m[1] + t7 * m[5] + t10 * m[13]) - (t3 * m[1] + t6 * m[5] + t11 * m[13]);
   o[3] = (t5 * m[1] + t8 * m[5] + t11 * m[9]) - (t4 * m[1] + t9 * m[5] + t10 * m[9]);
-  f32 d = 1.0f / (m[0] * o[0] + m[4] * o[1] + m[8] * o[2] + m[12] * o[3]);
+  f32 det = m[0] * o[0] + m[4] * o[1] + m[8] * o[2] + m[12] * o[3];
+  if (egnabs(det) <= EGN_FLOAT_EPSILON)
+    return mat4_identity();
+  f32 d = 1.0f / det;
   o[0] = d * o[0];
   o[1] = d * o[1];
   o[2] = d * o[2];
@@ -702,8 +736,8 @@ EGNINLINE mat4 mat4_euler_xyz(f32 x_radians, f32 y_radians, f32 z_radians)
 EGNINLINE vec3 mat4_forward(mat4 matrix)
 {
   vec3 forward;
-  forward.x = -matrix.data[2];
-  forward.y = -matrix.data[6];
+  forward.x = -matrix.data[8];
+  forward.y = -matrix.data[9];
   forward.z = -matrix.data[10];
   vec3_normalize(&forward);
   return forward;
@@ -717,8 +751,8 @@ EGNINLINE vec3 mat4_forward(mat4 matrix)
 EGNINLINE vec3 mat4_backward(mat4 matrix)
 {
   vec3 backward;
-  backward.x = matrix.data[2];
-  backward.y = matrix.data[6];
+  backward.x = matrix.data[8];
+  backward.y = matrix.data[9];
   backward.z = matrix.data[10];
   vec3_normalize(&backward);
   return backward;
@@ -732,9 +766,9 @@ EGNINLINE vec3 mat4_backward(mat4 matrix)
 EGNINLINE vec3 mat4_up(mat4 matrix)
 {
   vec3 up;
-  up.x = matrix.data[1];
+  up.x = matrix.data[4];
   up.y = matrix.data[5];
-  up.z = matrix.data[9];
+  up.z = matrix.data[6];
   vec3_normalize(&up);
   return up;
 }
@@ -747,9 +781,9 @@ EGNINLINE vec3 mat4_up(mat4 matrix)
 EGNINLINE vec3 mat4_down(mat4 matrix)
 {
   vec3 down;
-  down.x = -matrix.data[1];
+  down.x = -matrix.data[4];
   down.y = -matrix.data[5];
-  down.z = -matrix.data[9];
+  down.z = -matrix.data[6];
   vec3_normalize(&down);
   return down;
 }
@@ -761,12 +795,12 @@ EGNINLINE vec3 mat4_down(mat4 matrix)
  */
 EGNINLINE vec3 mat4_left(mat4 matrix)
 {
-  vec3 right;
-  right.x = -matrix.data[0];
-  right.y = -matrix.data[4];
-  right.z = -matrix.data[8];
-  vec3_normalize(&right);
-  return right;
+  vec3 left;
+  left.x = -matrix.data[0];
+  left.y = -matrix.data[1];
+  left.z = -matrix.data[2];
+  vec3_normalize(&left);
+  return left;
 }
 /**
  * @brief Returns a right vector relative to the provided matrix.
@@ -776,12 +810,12 @@ EGNINLINE vec3 mat4_left(mat4 matrix)
  */
 EGNINLINE vec3 mat4_right(mat4 matrix)
 {
-  vec3 left;
-  left.x = matrix.data[0];
-  left.y = matrix.data[4];
-  left.z = matrix.data[8];
-  vec3_normalize(&left);
-  return left;
+  vec3 right;
+  right.x = matrix.data[0];
+  right.y = matrix.data[1];
+  right.z = matrix.data[2];
+  vec3_normalize(&right);
+  return right;
 }
 // ------------------------------------------
 // Quaternion
@@ -801,6 +835,8 @@ EGNINLINE f32 quat_normal(quat q)
 EGNINLINE quat quat_normalize(quat q)
 {
   f32 normal = quat_normal(q);
+  if (normal <= EGN_FLOAT_EPSILON)
+    return quat_identity();
   return (quat){
       q.x / normal,
       q.y / normal,
@@ -817,7 +853,14 @@ EGNINLINE quat quat_conjugate(quat q)
 }
 EGNINLINE quat quat_inverse(quat q)
 {
-  return quat_normalize(quat_conjugate(q));
+  f32 n2 = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+  if (n2 <= EGN_FLOAT_EPSILON)
+    return quat_identity();
+  return (quat){
+      -q.x / n2,
+      -q.y / n2,
+      -q.z / n2,
+      q.w / n2};
 }
 EGNINLINE quat quat_mul(quat q_0, quat q_1)
 {
@@ -853,37 +896,36 @@ EGNINLINE mat4 quat_to_mat4(quat q)
   // https://stackoverflow.com/questions/1556260/convert-quaternion-rotation-to-rotation-matrix
   quat n = quat_normalize(q);
   out_matrix.data[0] = 1.0f - 2.0f * n.y * n.y - 2.0f * n.z * n.z;
-  out_matrix.data[1] = 2.0f * n.x * n.y - 2.0f * n.z * n.w;
-  out_matrix.data[2] = 2.0f * n.x * n.z + 2.0f * n.y * n.w;
-  out_matrix.data[4] = 2.0f * n.x * n.y + 2.0f * n.z * n.w;
+  out_matrix.data[1] = 2.0f * n.x * n.y + 2.0f * n.z * n.w;
+  out_matrix.data[2] = 2.0f * n.x * n.z - 2.0f * n.y * n.w;
+  out_matrix.data[4] = 2.0f * n.x * n.y - 2.0f * n.z * n.w;
   out_matrix.data[5] = 1.0f - 2.0f * n.x * n.x - 2.0f * n.z * n.z;
-  out_matrix.data[6] = 2.0f * n.y * n.z - 2.0f * n.x * n.w;
-  out_matrix.data[8] = 2.0f * n.x * n.z - 2.0f * n.y * n.w;
-  out_matrix.data[9] = 2.0f * n.y * n.z + 2.0f * n.x * n.w;
+  out_matrix.data[6] = 2.0f * n.y * n.z + 2.0f * n.x * n.w;
+  out_matrix.data[8] = 2.0f * n.x * n.z + 2.0f * n.y * n.w;
+  out_matrix.data[9] = 2.0f * n.y * n.z - 2.0f * n.x * n.w;
   out_matrix.data[10] = 1.0f - 2.0f * n.x * n.x - 2.0f * n.y * n.y;
   return out_matrix;
 }
 // Calculates a rotation matrix based on the quaternion and the passed in center point.
 EGNINLINE mat4 quat_to_rotation_matrix(quat q, vec3 center)
 {
-  mat4 out_matrix;
-  f32 *o = out_matrix.data;
-  o[0] = (q.x * q.x) - (q.y * q.y) - (q.z * q.z) + (q.w * q.w);
-  o[1] = 2.0f * ((q.x * q.y) + (q.z * q.w));
-  o[2] = 2.0f * ((q.x * q.z) - (q.y * q.w));
-  o[3] = center.x - center.x * o[0] - center.y * o[1] - center.z * o[2];
-  o[4] = 2.0f * ((q.x * q.y) - (q.z * q.w));
-  o[5] = -(q.x * q.x) + (q.y * q.y) - (q.z * q.z) + (q.w * q.w);
-  o[6] = 2.0f * ((q.y * q.z) + (q.x * q.w));
-  o[7] = center.y - center.x * o[4] - center.y * o[5] - center.z * o[6];
-  o[8] = 2.0f * ((q.x * q.z) + (q.y * q.w));
-  o[9] = 2.0f * ((q.y * q.z) - (q.x * q.w));
-  o[10] = -(q.x * q.x) - (q.y * q.y) + (q.z * q.z) + (q.w * q.w);
-  o[11] = center.z - center.x * o[8] - center.y * o[9] - center.z * o[10];
-  o[12] = 0.0f;
-  o[13] = 0.0f;
-  o[14] = 0.0f;
-  o[15] = 1.0f;
+  // Rotation part follows the same column-major convention as quat_to_mat4.
+  mat4 out_matrix = quat_to_mat4(q);
+
+  // Rotation around an arbitrary center: T(center) * R * T(-center).
+  // The translation column becomes center - R * center.
+  f32 cx = center.x;
+  f32 cy = center.y;
+  f32 cz = center.z;
+
+  f32 rx = out_matrix.data[0] * cx + out_matrix.data[4] * cy + out_matrix.data[8] * cz;
+  f32 ry = out_matrix.data[1] * cx + out_matrix.data[5] * cy + out_matrix.data[9] * cz;
+  f32 rz = out_matrix.data[2] * cx + out_matrix.data[6] * cy + out_matrix.data[10] * cz;
+
+  out_matrix.data[12] = cx - rx;
+  out_matrix.data[13] = cy - ry;
+  out_matrix.data[14] = cz - rz;
+  out_matrix.data[15] = 1.0f;
   return out_matrix;
 }
 EGNINLINE quat quat_from_axis_angle(vec3 axis, f32 angle, b8 normalize)
@@ -897,6 +939,68 @@ EGNINLINE quat quat_from_axis_angle(vec3 axis, f32 angle, b8 normalize)
     return quat_normalize(q);
   }
   return q;
+}
+
+/** @brief Builds a quaternion from Euler angles in radians (X * Y * Z order). */
+EGNINLINE quat quat_from_euler_xyz(f32 x_radians, f32 y_radians, f32 z_radians)
+{
+  quat qx = quat_from_axis_angle((vec3){1.0f, 0.0f, 0.0f}, x_radians, true);
+  quat qy = quat_from_axis_angle((vec3){0.0f, 1.0f, 0.0f}, y_radians, true);
+  quat qz = quat_from_axis_angle((vec3){0.0f, 0.0f, 1.0f}, z_radians, true);
+  return quat_normalize(quat_mul(quat_mul(qx, qy), qz));
+}
+
+/** @brief Extracts a quaternion from the rotation part of a column-major mat4. */
+EGNINLINE quat quat_from_mat4(mat4 matrix)
+{
+  // Column-major storage: m[column * 4 + row].
+  f32 m00 = matrix.data[0];
+  f32 m01 = matrix.data[4];
+  f32 m02 = matrix.data[8];
+  f32 m10 = matrix.data[1];
+  f32 m11 = matrix.data[5];
+  f32 m12 = matrix.data[9];
+  f32 m20 = matrix.data[2];
+  f32 m21 = matrix.data[6];
+  f32 m22 = matrix.data[10];
+
+  f32 trace = m00 + m11 + m22;
+  quat out_quaternion;
+
+  if (trace > 0.0f)
+  {
+    f32 s = egnsqrt(trace + 1.0f) * 2.0f;
+    out_quaternion.w = 0.25f * s;
+    out_quaternion.x = (m21 - m12) / s;
+    out_quaternion.y = (m02 - m20) / s;
+    out_quaternion.z = (m10 - m01) / s;
+  }
+  else if (m00 > m11 && m00 > m22)
+  {
+    f32 s = egnsqrt(1.0f + m00 - m11 - m22) * 2.0f;
+    out_quaternion.w = (m21 - m12) / s;
+    out_quaternion.x = 0.25f * s;
+    out_quaternion.y = (m01 + m10) / s;
+    out_quaternion.z = (m02 + m20) / s;
+  }
+  else if (m11 > m22)
+  {
+    f32 s = egnsqrt(1.0f + m11 - m00 - m22) * 2.0f;
+    out_quaternion.w = (m02 - m20) / s;
+    out_quaternion.x = (m01 + m10) / s;
+    out_quaternion.y = 0.25f * s;
+    out_quaternion.z = (m12 + m21) / s;
+  }
+  else
+  {
+    f32 s = egnsqrt(1.0f + m22 - m00 - m11) * 2.0f;
+    out_quaternion.w = (m10 - m01) / s;
+    out_quaternion.x = (m02 + m20) / s;
+    out_quaternion.y = (m12 + m21) / s;
+    out_quaternion.z = 0.25f * s;
+  }
+
+  return quat_normalize(out_quaternion);
 }
 EGNINLINE quat quat_slerp(quat q_0, quat q_1, f32 percentage)
 {

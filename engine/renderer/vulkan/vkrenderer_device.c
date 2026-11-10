@@ -44,7 +44,8 @@ b8 vkrenderer_device_create(VkContext *ctx)
 
     // create an array with the priority of each queue
     f32 *priorities2 = MEMOALLOC(sizeof(f32) * queue_info[i].queueCount, MEMO_RENDERER);
-    MEMOSET(priorities2, (i32)1.0f, sizeof(f32) * queue_info[i].queueCount);
+    for (u32 j = 0; j < queue_info[i].queueCount; j++)
+      priorities2[j] = 1.0f;
 
     queue_info[i].pQueuePriorities = priorities2;
 
@@ -98,6 +99,14 @@ b8 vkrenderer_device_create(VkContext *ctx)
 
 void vkrenderer_device_destroy(VkContext *ctx)
 {
+  if (ctx->device.graphics_command_pool)
+    vkDestroyCommandPool(ctx->device.handle, ctx->device.graphics_command_pool, ctx->allocator);
+
+  if (ctx->device.swapchain_support.formats)
+    MEMOFREE(ctx->device.swapchain_support.formats);
+  if (ctx->device.swapchain_support.present_modes)
+    MEMOFREE(ctx->device.swapchain_support.present_modes);
+
   vkDestroyDevice(ctx->device.handle, ctx->allocator);
 }
 
@@ -289,7 +298,7 @@ b8 physical_device_meets_requirements(VkPhysicalDevice device, VkSurfaceKHR surf
     b8 found = false;
     for (u32 j = 0; j < ext_count; j++)
     {
-      if (strcmp(requirements->device_extensions[i], (const char *)ext_properties[j].extensionName))
+      if (!strcmp(requirements->device_extensions[i], (const char *)ext_properties[j].extensionName))
       {
         found = true;
         break;

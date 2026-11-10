@@ -12,6 +12,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <poll.h>
 #include "xdg-shell-client-protocol.h"
 
 static void global_registry_handler(void *data, struct wl_registry *registry, u32 id,
@@ -45,6 +47,11 @@ static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 
 b8 window_create(const char *window_name, u32 pos_x, u32 pos_y, u32 width, u32 height, Window *out_window)
 {
+  // Wayland does not let clients choose the absolute position of a toplevel.
+  // pos_x/pos_y are accepted for API portability but are intentionally ignored.
+  (void)pos_x;
+  (void)pos_y;
+
   WaylandState *state = MEMOALLOC(sizeof(WaylandState), MEMO_WINDOW);
   MEMOSET(state, 0, sizeof(WaylandState));
   out_window->internal_state = state;
@@ -92,8 +99,10 @@ void window_destroy(Window *window)
 
 b8 window_show(Window *window)
 {
-  WaylandState *state = (WaylandState *)window->internal_state;
-  xdg_toplevel_set_maximized(state->xdg_toplevel);
+  // The surface is mapped when the first swapchain image is presented.
+  // Do not maximize here, otherwise the size requested in EngineSettings
+  // (window_width/window_height) would be ignored.
+  (void)window;
   return true;
 }
 b8 window_hide(Window *window)
@@ -105,7 +114,49 @@ b8 window_hide(Window *window)
 b8 window_process_messages(Window *window)
 {
   WaylandState *state = (WaylandState *)window->internal_state;
-  wl_display_dispatch(state->display);
+  struct wl_display *display = state->display;
+
+  // Pump pending Wayland events without blocking the render loop.
+  while (wl_display_prepare_read(display) != 0)
+  {
+    if (wl_display_dispatch_pending(display) == -1)
+      return false;
+  }
+
+  if (wl_display_flush(display) == -1 && errno != EAGAIN)
+  {
+    wl_display_cancel_read(display);
+    return false;
+  }
+
+  struct pollfd pfd = {wl_display_get_fd(display), POLLIN, 0};
+  if (poll(&pfd, 1, 0) > 0)
+  {
+    if (wl_display_read_events(display) == -1)
+      return false;
+  }
+  else
+  {
+    wl_display_cancel_read(display);
+  }
+
+  if (wl_display_dispatch_pending(display) == -1)
+    return false;
+
+  return true;
+}
+
+b8 window_get_size(Window *window, u32 *out_width, u32 *out_height)
+{
+  if (!window || !window->internal_state)
+    return false;
+
+  WaylandState *state = (WaylandState *)window->internal_state;
+  if (out_width)
+    *out_width = state->width;
+  if (out_height)
+    *out_height = state->height;
+
   return true;
 }
 
@@ -132,7 +183,10 @@ static void xdg_wm_base_ping(void *data, struct xdg_wm_base *shell, u32 serial)
   xdg_wm_base_pong(shell, serial);
 }
 
-static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface, u32 serial) {}
+static void xdg_surface_configure(void *data, struct xdg_surface *xdg_surface, u32 serial)
+{
+  xdg_surface_ack_configure(xdg_surface, serial);
+}
 
 static void xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel, i32 width,
                                    i32 height, struct wl_array *states)
@@ -142,8 +196,11 @@ static void xdg_toplevel_configure(void *data, struct xdg_toplevel *xdg_toplevel
 
   if (!width || !height)
     return;
-  if (width == state->width && height == state->height)
+  if (width == (i32)state->width && height == (i32)state->height)
     return;
+
+  state->width = width;
+  state->height = height;
 
   EventContext ctx = {0};
   ctx.data.u16[0] = width;

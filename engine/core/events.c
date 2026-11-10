@@ -88,3 +88,11 @@ b8 events_fire(u16 code, void *sender, EventContext data)
 
   return false;
 }
+
+b8 events_fire2(u16 code, void *sender, u64 data0, u64 data1)
+{
+  EventContext ctx = {0};
+  ctx.data.u64[0] = data0;
+  ctx.data.u64[1] = data1;
+  return events_fire(code, sender, ctx);
+}

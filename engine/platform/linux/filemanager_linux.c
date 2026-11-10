@@ -9,6 +9,54 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <string.h>
+
+/**
+ * Resolves a path used for reading.
+ *
+ * Absolute paths are used as-is. Relative paths are first looked up from the
+ * current working directory. If they do not exist there, they are resolved
+ * against the directory that contains the executable. This lets the game read
+ * `assets/...` and `shaders/...` regardless of where it was launched from.
+ */
+static b8 filemanager_resolve_read_path(const char *path, char *out_path, u64 out_size)
+{
+  if (!path || !out_path || out_size == 0)
+    return false;
+
+  snprintf(out_path, out_size, "%s", path);
+
+  FILE *file = fopen(out_path, "rb");
+  if (file)
+  {
+    fclose(file);
+    return true;
+  }
+
+  if (path[0] == '/')
+    return false;
+
+  char executable_path[1024];
+  ssize_t length = readlink("/proc/self/exe", executable_path, sizeof(executable_path) - 1);
+  if (length <= 0)
+    return false;
+
+  executable_path[length] = '\0';
+
+  char *last_slash = strrchr(executable_path, '/');
+  if (!last_slash)
+    return false;
+
+  *last_slash = '\0';
+  snprintf(out_path, out_size, "%s/%s", executable_path, path);
+
+  file = fopen(out_path, "rb");
+  if (!file)
+    return false;
+
+  fclose(file);
+  return true;
+}
 
 b8 filemanager_exist(const char *path)
 {
@@ -104,13 +152,20 @@ u64 filemanager_read(FileHandle *handle, u8 *dest, u64 start, u64 end)
 
 b8 filemanager_read_all(const char *path, u8 **out_buffer_ptr, u64 *out_length)
 {
-  FILE *file = fopen(path, "r+b");
+  if (!out_buffer_ptr || !out_length)
+    return false;
+
+  char resolved_path[2048];
+  if (!filemanager_resolve_read_path(path, resolved_path, sizeof(resolved_path)))
+    return false;
+
+  FILE *file = fopen(resolved_path, "rb");
   if (file == 0)
     return false;
 
   fseek(file, 0, SEEK_END);
   u64 len = (u64)ftell(file);
-  u8 *buffer = MEMOALLOC(len, MEMO_UNKNOWN);
+  u8 *buffer = MEMOALLOC(len, MEMO_FILE);
 
   fseek(file, 0, SEEK_SET);
   u64 bytes_read = fread(buffer, 1, len, file);

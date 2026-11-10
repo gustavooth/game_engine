@@ -10,7 +10,9 @@ static const char *MemoryTagStrings[MEMO_TAG_MAX_TAGS] = {
     "LINEAR_ALLOCATOR   ",
     "EGNARRAY           ",
     "WINDOW             ",
-    "RENDERER           "};
+    "RENDERER           ",
+    "FILE               ",
+    "SCENE              "};
 
 typedef struct MemoryData
 {

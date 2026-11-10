@@ -57,6 +57,20 @@ EGNAPI b8 events_unregister(u16 code, PFN_on_event on_event);
  */
 EGNAPI b8 events_fire(u16 code, void *sender, EventContext data);
 
+/**
+ * Fires an event using two 64-bit words as the event context.
+ *
+ * This is the ABI-friendly entry point used by language bindings (like the V
+ * SDK): it avoids passing a C union/struct by value across FFI boundaries.
+ *
+ * @param code The event code to fire.
+ * @param sender A pointer to the sender. Can be 0/NULL.
+ * @param data0 First 64-bit word of EventContext.
+ * @param data1 Second 64-bit word of EventContext.
+ * @returns TRUE if a listener returns true.
+ */
+EGNAPI b8 events_fire2(u16 code, void *sender, u64 data0, u64 data1);
+
 // System internal event codes. Application should use codes beyond 255.
 typedef enum system_event_code
 {

@@ -2,10 +2,17 @@
 
 #include "core/asserts.h"
 #include "defines.h"
+#include "math/math.h"
+#include "renderer/renderer_types.h"
 #include <vulkan/vulkan.h>
 
 #define VKCHECK(expr)                                                          \
   { EGNASSERT(expr == VK_SUCCESS); }
+
+// Hard limits for renderer-owned resources. Handles returned to games are
+// 1-based indexes into these tables; 0 always means "invalid".
+#define VKRENDERER_MAX_TEXTURES 512
+#define VKRENDERER_MAX_MESHES 512
 
 typedef struct VkRendererQueueIndexes {
   u32 graphics_family_index; // queue family index
@@ -132,6 +139,27 @@ typedef struct VkRendererShader {
   VkRendererPipeline pipeline;
 } VkRendererShader;
 
+typedef struct VkRendererTexture {
+  VkImage image;
+  VkDeviceMemory memory;
+  VkImageView view;
+  VkSampler sampler;
+  VkDescriptorSet descriptor_set;
+  u32 width;
+  u32 height;
+  b8 used;
+} VkRendererTexture;
+
+typedef struct VkRendererMesh {
+  VkBuffer vertex_buffer;
+  VkDeviceMemory vertex_memory;
+  VkBuffer index_buffer;
+  VkDeviceMemory index_memory;
+  u32 vertex_count;
+  u32 index_count;
+  b8 used;
+} VkRendererMesh;
+
 typedef struct VkContext {
   VkInstance instance;
   VkDebugUtilsMessengerEXT debug_messenger;
@@ -164,7 +192,25 @@ typedef struct VkContext {
   // image count
   VkRendererFence **images_in_flight;
 
-  VkRendererShader object_shader;
+  // Shared descriptor set layout: binding 0 is a combined image sampler.
+  VkDescriptorSetLayout descriptor_set_layout;
+  VkDescriptorPool descriptor_pool;
+
+  VkRendererShader shader_3d;
+  VkRendererShader shader_sprite;
+
+  VkRendererTexture white_texture;
+  VkRendererTexture textures[VKRENDERER_MAX_TEXTURES];
+  VkRendererMesh meshes[VKRENDERER_MAX_MESHES];
+
+  // Handles for renderer-owned primitive meshes.
+  u32 cube_mesh;
+  u32 sphere_mesh;
+  u32 sprite_mesh;
 
   b8 (*find_memory_index)(u32 type_filter, u32 property_flags, u32 *out_index);
 } VkContext;
+
+// Implemented in vkrenderer.c so renderer submodules can reach the singleton
+// context without exposing it as a global symbol.
+VkContext *vkrenderer_get_context(void);

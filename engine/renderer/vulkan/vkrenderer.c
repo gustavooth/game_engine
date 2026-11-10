@@ -8,15 +8,31 @@
 #include "vkrenderer_framebuffer.h"
 #include "vkrenderer_fence.h"
 #include "vkrenderer_utils.h"
+#include "vkrenderer_buffer.h"
+#include "vkrenderer_descriptor.h"
+#include "vkrenderer_scene.h"
+#include "vkrenderer_mesh.h"
+#include "vkrenderer_texture.h"
+#include "vkrenderer_screenshot.h"
 #include "shader/vkrenderer_shader.h"
 #include "core/logger.h"
 #include "core/memo.h"
 #include "platform/window.h"
 
+#include <stddef.h>
+#include <string.h>
+
 static VkContext ctx;
+
+VkContext *vkrenderer_get_context(void)
+{
+  return &ctx;
+}
 static u32 cached_framebuffer_width;
 static u32 cached_framebuffer_height;
 static u64 next_framebuffer_generation;
+static b8 validation_layer_enabled;
+static PFN_vkDestroyDebugUtilsMessengerEXT debug_messenger_destroy_fn;
 
 b8 create_instance();
 b8 setup_debug_messenger();
@@ -32,6 +48,54 @@ b8 begin_frame();
 b8 end_frame();
 
 b8 handle_recreate_swapchain();
+
+static b8 create_render_pipelines(void)
+{
+  VkVertexInputBindingDescription binding_3d = {0};
+  binding_3d.binding = 0;
+  binding_3d.stride = sizeof(MeshVertex);
+  binding_3d.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+  VkVertexInputAttributeDescription attributes_3d[3] = {
+      {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshVertex, position)},
+      {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(MeshVertex, normal)},
+      {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(MeshVertex, uv)},
+  };
+
+  VkRendererShaderParams params_3d = {0};
+  params_3d.vert_path = "shaders/3d.vert.spv";
+  params_3d.frag_path = "shaders/3d.frag.spv";
+  params_3d.binding = &binding_3d;
+  params_3d.attributes = attributes_3d;
+  params_3d.attribute_count = 3;
+  params_3d.push_constant_size = 128; // mat4 + mat3 + vec4
+  params_3d.depth_test = true;
+  params_3d.depth_write = true;
+  params_3d.blending = true;
+  params_3d.cull_mode = VK_CULL_MODE_NONE;
+  params_3d.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+  if (!vkrenderer_shader_create(&ctx, &params_3d, &ctx.shader_3d))
+    return false;
+
+  VkRendererShaderParams params_sprite = {0};
+  params_sprite.vert_path = "shaders/sprite.vert.spv";
+  params_sprite.frag_path = "shaders/sprite.frag.spv";
+  params_sprite.binding = &binding_3d;
+  params_sprite.attributes = attributes_3d;
+  params_sprite.attribute_count = 3;
+  params_sprite.push_constant_size = 128; // mat4 + mat3 + vec4
+  params_sprite.depth_test = true;
+  params_sprite.depth_write = true;
+  params_sprite.blending = true;
+  params_sprite.cull_mode = VK_CULL_MODE_NONE;
+  params_sprite.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+  if (!vkrenderer_shader_create(&ctx, &params_sprite, &ctx.shader_sprite))
+    return false;
+
+  return true;
+}
 
 b8 renderer_initialize(Window *win, u32 width, u32 height)
 {
@@ -59,8 +123,23 @@ b8 renderer_initialize(Window *win, u32 width, u32 height)
   create_command_buffers();
   create_sync_objects();
 
-  if(!vkrenderer_shader_create(&ctx, &ctx.object_shader))
+  if (!vkrenderer_descriptors_create(&ctx))
     return false;
+
+  if (!create_render_pipelines())
+    return false;
+
+  if (!vkrenderer_texture_create_solid(&ctx, 255, 255, 255, 255, &ctx.white_texture))
+    return false;
+
+  ctx.cube_mesh = vkrenderer_mesh_create_cube(&ctx);
+  ctx.sphere_mesh = vkrenderer_mesh_create_sphere(&ctx, 32, 16);
+  ctx.sprite_mesh = vkrenderer_mesh_create_quad(&ctx);
+  if (ctx.cube_mesh == 0 || ctx.sphere_mesh == 0 || ctx.sprite_mesh == 0)
+  {
+    EGNERROR("VKRENDERER failed to create primitive meshes");
+    return false;
+  }
 
   EGNINFO("VKRENDERER Initialized!");
 
@@ -71,12 +150,37 @@ void renderer_shutdown()
 {
   vkDeviceWaitIdle(ctx.device.handle);
 
+  vkrenderer_screenshot_shutdown(&ctx);
+
+  vkrenderer_mesh_destroy(&ctx, ctx.cube_mesh);
+  vkrenderer_mesh_destroy(&ctx, ctx.sphere_mesh);
+  vkrenderer_mesh_destroy(&ctx, ctx.sprite_mesh);
+  ctx.cube_mesh = 0;
+  ctx.sphere_mesh = 0;
+  ctx.sprite_mesh = 0;
+
+  for (u32 i = 0; i < VKRENDERER_MAX_TEXTURES; i++)
+  {
+    if (ctx.textures[i].used)
+      vkrenderer_texture_destroy(&ctx, &ctx.textures[i]);
+  }
+
+  vkrenderer_texture_destroy(&ctx, &ctx.white_texture);
+
+  vkrenderer_shader_destroy(&ctx, &ctx.shader_3d);
+  vkrenderer_shader_destroy(&ctx, &ctx.shader_sprite);
+
+  vkrenderer_descriptors_destroy(&ctx);
+  vkrenderer_renderpass_destroy(&ctx, &ctx.main_renderpass);
+
   destroy_sync_objects();
   destroy_command_buffers();
   destroy_framebuffers();
   vkrenderer_swapchain_destroy(&ctx, &ctx.swapchain);
   vkrenderer_device_destroy(&ctx);
   vkrenderer_surface_destroy(&ctx);
+  if (ctx.debug_messenger && debug_messenger_destroy_fn)
+    debug_messenger_destroy_fn(ctx.instance, ctx.debug_messenger, ctx.allocator);
   vkDestroyInstance(ctx.instance, ctx.allocator);
 }
 
@@ -91,13 +195,51 @@ void renderer_resize(u32 width, u32 height)
 
 b8 renderer_draw_frame(RenderPacket packet)
 {
+  (void)packet;
+
   if (!begin_frame())
     return false;
+
+  VkRendererCommandBuffer *command_buffer = &ctx.graphics_command_buffers[ctx.image_index];
+
+  vkrenderer_renderpass_begin(command_buffer, &ctx.main_renderpass,
+                              ctx.framebuffers[ctx.image_index].handle);
+
+  vkrenderer_scene_render(&ctx, command_buffer);
 
   if (!end_frame())
     return false;
 
+  vkrenderer_screenshot_capture(&ctx);
+
   return true;
+}
+
+static b8 instance_layer_available(const char *layer_name)
+{
+  u32 layer_count = 0;
+  if (vkEnumerateInstanceLayerProperties(&layer_count, NULL) != VK_SUCCESS || layer_count == 0)
+    return false;
+
+  VkLayerProperties *layers = MEMOALLOC(sizeof(VkLayerProperties) * layer_count, MEMO_RENDERER);
+  if (vkEnumerateInstanceLayerProperties(&layer_count, layers) != VK_SUCCESS)
+  {
+    MEMOFREE(layers);
+    return false;
+  }
+
+  b8 found = false;
+  for (u32 i = 0; i < layer_count; i++)
+  {
+    if (!strcmp(layers[i].layerName, layer_name))
+    {
+      found = true;
+      break;
+    }
+  }
+
+  MEMOFREE(layers);
+  return found;
 }
 
 b8 create_instance()
@@ -114,34 +256,32 @@ b8 create_instance()
   VkInstanceCreateInfo instance_info = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
   instance_info.pApplicationInfo = &app_info;
 
-  u32 instance_ext_count = 3;
-  const char **instance_extensions = MEMOALLOC(sizeof(const char *) * instance_ext_count, MEMO_RENDERER);
-  const char *surface_ext = VK_KHR_SURFACE_EXTENSION_NAME;
-  const char *debug_ext = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+  const char *validation_layer = "VK_LAYER_KHRONOS_validation";
+  validation_layer_enabled = instance_layer_available(validation_layer);
+  if (!validation_layer_enabled)
+    EGNWARN("VKRENDERER validation layer not available, running without validation");
+
+  const char *instance_extensions[3];
+  u32 instance_ext_count = 0;
+  instance_extensions[instance_ext_count++] = VK_KHR_SURFACE_EXTENSION_NAME;
 #ifdef EGNPLATFORM_WAYLAND
-  const char *platform_ext = "VK_KHR_wayland_surface";
+  instance_extensions[instance_ext_count++] = "VK_KHR_wayland_surface";
 #elif EGNPLATFORM_WIN32
-  const char *platform_ext = "VK_KHR_win32_surface";
+  instance_extensions[instance_ext_count++] = "VK_KHR_win32_surface";
 #endif
-  instance_extensions[0] = surface_ext;
-  instance_extensions[1] = debug_ext;
-  instance_extensions[2] = platform_ext;
+  if (validation_layer_enabled)
+    instance_extensions[instance_ext_count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 
   instance_info.enabledExtensionCount = instance_ext_count;
   instance_info.ppEnabledExtensionNames = instance_extensions;
 
-  u32 instance_layers_count = 1;
-  const char **instance_layers = MEMOALLOC(sizeof(const char *) * instance_layers_count, MEMO_RENDERER);
-  const char *validation_layer = "VK_LAYER_KHRONOS_validation";
-  instance_layers[0] = validation_layer;
-
-  instance_info.enabledLayerCount = instance_layers_count;
-  instance_info.ppEnabledLayerNames = instance_layers;
+  if (validation_layer_enabled)
+  {
+    instance_info.enabledLayerCount = 1;
+    instance_info.ppEnabledLayerNames = &validation_layer;
+  }
 
   VKCHECK(vkCreateInstance(&instance_info, ctx.allocator, &ctx.instance))
-
-  MEMOFREE(instance_extensions);
-  MEMOFREE(instance_layers);
 
   return true;
 }
@@ -173,6 +313,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
 
 b8 setup_debug_messenger()
 {
+  if (!validation_layer_enabled)
+    return true;
+
   EGNDEBUG("VKRENDERER Creating debug messenger...");
   VkDebugUtilsMessengerCreateInfoEXT debug_info = {VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
   debug_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
@@ -189,6 +332,9 @@ b8 setup_debug_messenger()
   }
 
   VKCHECK(func(ctx.instance, &debug_info, ctx.allocator, &ctx.debug_messenger))
+
+  debug_messenger_destroy_fn =
+      (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(ctx.instance, "vkDestroyDebugUtilsMessengerEXT");
 
   return true;
 }
@@ -271,18 +417,22 @@ void create_sync_objects()
   EGNDEBUG("VKRENDERER creating sync objects...");
 
   ctx.image_available_semaphores = MEMOALLOC(sizeof(VkSemaphore) * ctx.swapchain.max_frame_in_flight, MEMO_RENDERER);
-  ctx.queue_complete_semaphores = MEMOALLOC(sizeof(VkSemaphore) * ctx.swapchain.max_frame_in_flight, MEMO_RENDERER);
-  ctx.in_flight_fences = MEMOALLOC(sizeof(VkSemaphore) * ctx.swapchain.max_frame_in_flight, MEMO_RENDERER);
+  ctx.queue_complete_semaphores = MEMOALLOC(sizeof(VkSemaphore) * ctx.swapchain.image_count, MEMO_RENDERER);
+  ctx.in_flight_fences = MEMOALLOC(sizeof(VkRendererFence) * ctx.swapchain.max_frame_in_flight, MEMO_RENDERER);
   ctx.images_in_flight = MEMOZALLOC(sizeof(VkSemaphore) * ctx.swapchain.image_count, MEMO_RENDERER);
+
+  VkSemaphoreCreateInfo semaphore_info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
   for (u32 i = 0; i < ctx.swapchain.max_frame_in_flight; i++)
   {
-    VkSemaphoreCreateInfo semaphore_info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     vkCreateSemaphore(ctx.device.handle, &semaphore_info, ctx.allocator, &ctx.image_available_semaphores[i]);
-    vkCreateSemaphore(ctx.device.handle, &semaphore_info, ctx.allocator, &ctx.queue_complete_semaphores[i]);
-
     vkrenderer_fence_create(&ctx, true, &ctx.in_flight_fences[i]);
   }
+
+  // One semaphore per swapchain image so it is only reused after that image
+  // has been acquired again (i.e. its previous presentation has finished).
+  for (u32 i = 0; i < ctx.swapchain.image_count; i++)
+    vkCreateSemaphore(ctx.device.handle, &semaphore_info, ctx.allocator, &ctx.queue_complete_semaphores[i]);
 }
 
 void destroy_sync_objects()
@@ -290,9 +440,11 @@ void destroy_sync_objects()
   for (u32 i = 0; i < ctx.swapchain.max_frame_in_flight; i++)
   {
     vkDestroySemaphore(ctx.device.handle, ctx.image_available_semaphores[i], ctx.allocator);
-    vkDestroySemaphore(ctx.device.handle, ctx.queue_complete_semaphores[i], ctx.allocator);
     vkrenderer_fence_destroy(&ctx, &ctx.in_flight_fences[i]);
   }
+
+  for (u32 i = 0; i < ctx.swapchain.image_count; i++)
+    vkDestroySemaphore(ctx.device.handle, ctx.queue_complete_semaphores[i], ctx.allocator);
 
   MEMOFREE(ctx.image_available_semaphores);
   MEMOFREE(ctx.queue_complete_semaphores);
@@ -324,8 +476,7 @@ b8 begin_frame()
   }
 
   if (!vkrenderer_fence_wait(&ctx, &ctx.in_flight_fences[ctx.current_frame], UINT64_MAX))
-    ;
-  return false;
+    return false;
 
   if (!vkrenderer_swapchain_acquire_next_image_index(&ctx, &ctx.swapchain, UINT64_MAX,
                                                      ctx.image_available_semaphores[ctx.current_frame], 0, &ctx.image_index))
@@ -351,8 +502,6 @@ b8 begin_frame()
   vkCmdSetViewport(command_buffer->handle, VK_FALSE, 1, &viewport);
   vkCmdSetScissor(command_buffer->handle, VK_FALSE, 1, &scissor);
 
-  vkrenderer_renderpass_begin(command_buffer, &ctx.main_renderpass, ctx.framebuffers[ctx.image_index].handle);
-
   return true;
 }
 
@@ -362,6 +511,8 @@ b8 end_frame()
 
   vkrenderer_renderpass_end(command_buffer, &ctx.main_renderpass);
 
+  vkrenderer_screenshot_record(&ctx, command_buffer);
+
   vkrenderer_command_buffer_end(command_buffer);
 
   vkrenderer_fence_reset(&ctx, &ctx.in_flight_fences[ctx.current_frame]);
@@ -370,14 +521,14 @@ b8 end_frame()
   submit_info.commandBufferCount = 1;
   submit_info.pCommandBuffers = &command_buffer->handle;
   submit_info.signalSemaphoreCount = 1;
-  submit_info.pSignalSemaphores = &ctx.queue_complete_semaphores[ctx.current_frame];
+  submit_info.pSignalSemaphores = &ctx.queue_complete_semaphores[ctx.image_index];
   submit_info.waitSemaphoreCount = 1;
   submit_info.pWaitSemaphores = &ctx.image_available_semaphores[ctx.current_frame];
 
   VkPipelineStageFlags stage_flags = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
   submit_info.pWaitDstStageMask = &stage_flags;
 
-  VkResult result = vkQueueSubmit(ctx.device.graphics, 1, &submit_info, ctx.in_flight_fences->handle);
+  VkResult result = vkQueueSubmit(ctx.device.graphics, 1, &submit_info, ctx.in_flight_fences[ctx.current_frame].handle);
 
   if (result != VK_SUCCESS)
   {
@@ -388,7 +539,10 @@ b8 end_frame()
   vkrenderer_command_buffer_update_submitted(command_buffer);
 
   vkrenderer_swapchain_present(&ctx, &ctx.swapchain, ctx.device.graphics,
-                               ctx.device.present, ctx.queue_complete_semaphores[ctx.current_frame], ctx.image_index);
+                               ctx.device.present, ctx.queue_complete_semaphores[ctx.image_index], ctx.image_index);
+
+  if (ctx.swapchain.max_frame_in_flight > 0)
+    ctx.current_frame = (ctx.current_frame + 1) % ctx.swapchain.max_frame_in_flight;
 
   return true;
 }
@@ -407,23 +561,30 @@ b8 handle_recreate_swapchain()
 
   vkDeviceWaitIdle(ctx.device.handle);
 
-  vkrenderer_device_load_swapchain_support(&ctx);
-
-  if(!vkrenderer_device_detect_depth_format(&ctx.device))
-    return false;
-
-  vkrenderer_swapchain_recreate(&ctx, cached_framebuffer_width, cached_framebuffer_height, &ctx.swapchain);
-
+  destroy_sync_objects();
   destroy_command_buffers();
   destroy_framebuffers();
 
-  create_command_buffers();
-  create_framebuffers();
+  vkrenderer_device_load_swapchain_support(&ctx);
+
+  if (!vkrenderer_device_detect_depth_format(&ctx.device))
+  {
+    ctx.recreating_swapchain = false;
+    return false;
+  }
 
   ctx.framebuffer_width = cached_framebuffer_width;
   ctx.framebuffer_height = cached_framebuffer_height;
   ctx.main_renderpass.w = cached_framebuffer_width;
   ctx.main_renderpass.h = cached_framebuffer_height;
+
+  vkrenderer_swapchain_recreate(&ctx, cached_framebuffer_width, cached_framebuffer_height, &ctx.swapchain);
+
+  create_command_buffers();
+  create_framebuffers();
+  create_sync_objects();
+
+  ctx.current_frame = 0;
   ctx.framebuffer_generation = next_framebuffer_generation;
   cached_framebuffer_width = 0;
   cached_framebuffer_height = 0;
