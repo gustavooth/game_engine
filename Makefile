@@ -93,6 +93,23 @@ JOLT_LIBS := $(JOLTC_DIR)/build/lib/libjoltc.a $(JOLTC_DIR)/build/lib/libJolt.a
 JOLT_STAMP := $(JOLTC_DIR)/build/.egn_jolt_built
 JOLT_INC := -I$(JOLTC_DIR)/include
 
+# WebAssembly/WebGPU toolchain (Emscripten SDK installed under third_part).
+EMSDK_DIR ?= $(THIRD_PARTY_DIR)/emsdk
+EMCC ?= $(EMSDK_DIR)/upstream/emscripten/emcc
+EMXX ?= $(EMSDK_DIR)/upstream/emscripten/em++
+EMCMAKE ?= $(EMSDK_DIR)/upstream/emscripten/emcmake
+JOLTC_WEB_DIR := $(JOLTC_DIR)/build-web
+JOLT_WEB_LIBS := $(JOLTC_WEB_DIR)/lib/libjoltc.a $(JOLTC_WEB_DIR)/lib/libJolt.a
+JOLT_WEB_STAMP := $(JOLTC_WEB_DIR)/.egn_jolt_web_built
+
+WEB_DIR := web
+WEB_DIST := $(WEB_DIR)/dist
+WEB_ENGINE_JS := $(WEB_DIST)/engine.js
+WEB_ENGINE_WASM := $(WEB_DIST)/engine.wasm
+WEB_BUILD_DIR := build/web
+WEB_EXPORTS := $(WEB_BUILD_DIR)/exports.txt
+WEB_PORT ?= 8091
+
 BUILD_DIR := build
 BIN_DIR := bin
 
@@ -144,6 +161,23 @@ SDK_MANIFEST := egn/v.mod
 GAME_ASSETS_SRC := $(shell find $(GAME_DIR)/assets -type f 2>/dev/null)
 GAME_ASSETS := $(patsubst $(GAME_DIR)/assets/%,$(BIN_DIR)/assets/%,$(GAME_ASSETS_SRC))
 
+# Web build: C core compiled to wasm, JS/TS SDK + WebGPU renderer bundled by
+# esbuild. Physics uses the same Jolt sources rebuilt for wasm.
+WEB_C_SRC := \
+	$(ENGINE_DIR)/platform/web/platform_web.c \
+	$(ENGINE_DIR)/platform/web/web_bridge.c \
+	$(ENGINE_DIR)/core/memo.c \
+	$(ENGINE_DIR)/core/logger.c \
+	$(ENGINE_DIR)/core/egnstring.c \
+	$(ENGINE_DIR)/containers/egnarray.c \
+	$(ENGINE_DIR)/math/math.c \
+	$(ENGINE_DIR)/scene/scene.c \
+	$(ENGINE_DIR)/scene/component.c \
+	$(ENGINE_DIR)/physics/physics.c
+WEB_OBJ := $(patsubst $(ENGINE_DIR)/%.c,$(WEB_BUILD_DIR)/%.o,$(WEB_C_SRC))
+WEB_DEP := $(WEB_OBJ:.o=.d)
+WEB_CFLAGS := -O2 -MD -DEGNEXPORT -I$(ENGINE_DIR) -I$(THIRD_PARTY_DIR) $(JOLT_INC)
+
 # `game/v.mod` is the V project root. Add the repository root so `import egn`
 # resolves to <repo>/egn. @vlib/@vmodules keep the standard modules available.
 V_PATH := $(abspath $(GAME_DIR)/..)|@vlib|@vmodules
@@ -152,7 +186,7 @@ V_PATH := $(abspath $(GAME_DIR)/..)|@vlib|@vmodules
 # Targets
 # -----------------------------------------------------------------------------
 
-.PHONY: all build engine game run clean v jolt help
+.PHONY: all build engine game run clean v jolt emsdk jolt-web web web-sdk web-run clean-web help
 
 all: engine game
 
@@ -161,6 +195,79 @@ build: all
 engine: $(ENGINE_LIB) $(SPIRV)
 
 game: $(GAME_BIN)
+
+# -----------------------------------------------------------------------------
+# Web / WASM + WebGPU
+# -----------------------------------------------------------------------------
+
+$(WEB_BUILD_DIR)/%.o: $(ENGINE_DIR)/%.c | $(JOLT_WEB_STAMP)
+	@echo "  WASM-CC $<"
+	@$(MKDIR) $(dir $@)
+	@$(EMCC) $(WEB_CFLAGS) -c $< -o $@
+
+$(WEB_EXPORTS): $(ENGINE_DIR)/scene/scene.h $(ENGINE_DIR)/platform/web/web_bridge.c
+	@echo "  WASM-EXPORTS $@"
+	@$(MKDIR) $(dir $@)
+	@(grep -hoE 'egn_[a-zA-Z0-9_]+' $^ | sort -u | sed 's/^/_/' ; echo _malloc; echo _free) > $@
+
+$(WEB_ENGINE_JS): $(WEB_OBJ) $(JOLT_WEB_LIBS) $(WEB_EXPORTS)
+	@echo "  WASM-LD $@"
+	@$(MKDIR) $(dir $@)
+	@$(EMXX) $(WEB_OBJ) $(JOLT_WEB_LIBS) -o $@ \
+		-sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createEgnModule \
+		-sENVIRONMENT=web -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB \
+		-sSTACK_SIZE=2MB -sFILESYSTEM=0 \
+		-sEXPORTED_FUNCTIONS=@$(WEB_EXPORTS) \
+		-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPF32,HEAPU32
+
+web: $(WEB_ENGINE_JS) web-sdk
+	@echo "  WEB  demo ready in $(WEB_DIST)/"
+
+web-sdk: $(WEB_ENGINE_JS)
+	@if [ ! -d $(WEB_DIR)/node_modules ]; then \
+		echo "  NPM  installing web SDK dependencies"; \
+		cd $(WEB_DIR) && npm install; \
+	fi
+	@cd $(WEB_DIR) && node build.mjs
+
+web-run: web
+	@echo "  WEB  serving $(WEB_DIST) at http://localhost:$(WEB_PORT)/"
+	@cd $(WEB_DIST) && python3 -m http.server $(WEB_PORT)
+
+clean-web:
+	@echo "  CLEAN web"
+	@rm -rf $(WEB_DIST) $(WEB_BUILD_DIR)
+
+emsdk:
+	@if [ ! -x "$(EMCC)" ]; then \
+		git clone --depth 1 https://github.com/emscripten-core/emsdk.git $(EMSDK_DIR); \
+		cd $(EMSDK_DIR) && ./emsdk install latest && ./emsdk activate latest; \
+	else \
+		echo "Emscripten already installed at $(EMSDK_DIR)"; \
+	fi
+
+$(JOLT_WEB_LIBS): $(JOLT_WEB_STAMP)
+	@if [ ! -f "$@" ]; then $(MAKE) jolt-web; fi
+
+$(JOLT_WEB_STAMP):
+	@if [ ! -x "$(EMCMAKE)" ]; then \
+		echo "error: Emscripten not found. Run 'make emsdk' first."; \
+		exit 1; \
+	fi
+	@if [ ! -d $(JOLTC_DIR) ] || [ ! -d $(JOLT_DIR) ]; then $(MAKE) jolt; fi
+	@echo "  JOLT-WEB configuring"
+	@rm -rf $(JOLTC_WEB_DIR)
+	@$(EMCMAKE) $(CMAKE) -S $(JOLTC_DIR) -B $(JOLTC_WEB_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_CXX_FLAGS="-include type_traits" \
+		-DJPH_SAMPLES=OFF -DJPH_BUILD_SHARED=OFF \
+		-DENABLE_ALL_WARNINGS=OFF \
+		-DDEBUG_RENDERER_IN_DEBUG_AND_RELEASE=OFF \
+		-DPROFILER_IN_DEBUG_AND_RELEASE=OFF \
+		-DDEBUG_RENDERER_IN_DISTRIBUTION=OFF
+	@echo "  JOLT-WEB building"
+	@$(CMAKE) --build $(JOLTC_WEB_DIR) -j$$(nproc)
+	@touch $(JOLT_WEB_STAMP)
 
 $(ENGINE_LIB): $(ENGINE_OBJ) $(JOLT_LIBS)
 	@echo "  LD   $@"
@@ -256,10 +363,17 @@ help:
 	@echo "  make clean        remove build/ and bin/"
 	@echo "  make v            clone/build V in third_part/v"
 	@echo "  make jolt         clone/build JoltC + Jolt in third_part/"
+	@echo "  make emsdk        clone/install Emscripten in third_part/"
+	@echo "  make jolt-web     build JoltC/Jolt for WebAssembly"
+	@echo "  make web          build wasm core + JS/TS SDK + WebGPU demo"
+	@echo "  make web-run      build and serve the demo on WEB_PORT=$(WEB_PORT)"
+	@echo "  make clean-web    remove web build artifacts"
 	@echo "  make help         show this help"
 	@echo ""
 	@echo "Variables:"
 	@echo "  PLATFORM=$(PLATFORM)  CC=$(CC)  CXX=$(CXX)  V=$(V)"
+	@echo "  WEB_PORT=$(WEB_PORT)  EMCC=$(EMCC)"
 	@echo "  Override: make PLATFORM=linux CC=clang V=/path/to/v"
 
 -include $(ENGINE_DEP)
+-include $(WEB_DEP)

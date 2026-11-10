@@ -23,6 +23,8 @@ do módulo **EGN** (`egn/`).
   com fila de eventos e mensagens com tamanho prefixado no TCP.
 - **Demo:** personagem Fox animado, chão, física, partículas, luzes, câmera FPS
   com pointer lock real no Wayland, rede em localhost e captura de tela.
+- **Web:** build WASM + WebGPU para canvas, renderer WebGPU, SDK JS/TS e demo
+  web com física, OBJ/GLB, luzes, sombras e câmera FPS.
 
 ## Arquitetura
 
@@ -406,3 +408,35 @@ resultado no log.
 - rigging/animação por @tomkranis (CC BY 4.0).
 
 Consulte `game/assets/models/LICENSE_FOX.md`.
+
+
+## Build web (WASM + WebGPU)
+
+O build web usa Emscripten e expõe o núcleo C (cena, componentes e Jolt) como
+WebAssembly. O renderer WebGPU fica em `engine/renderer/webgpu/` e o SDK em
+`web/sdk/` (TypeScript, com bundle `egn.js` e `egn.d.ts`).
+
+Primeira vez:
+
+```sh
+make emsdk    # instala o Emscripten SDK em third_part/
+make web      # gera wasm, SDK e demo em web/dist/
+make web-run  # serve em http://localhost:8091
+```
+
+O WebGPU exige um contexto seguro (localhost/HTTPS) e um navegador com suporte
+a WebGPU. Em Linux, dependendo da GPU/driver, pode ser necessário habilitar
+`chrome://flags/#enable-unsafe-webgpu` e `chrome://flags/#enable-vulkan`.
+
+A API JavaScript é carregada assim:
+
+```html
+<script type="module">
+  import createEgnModule from './engine.js';
+  import * as EGN from './egn.js';
+  import { startDemo } from './demo.js';
+  startDemo(EGN, createEgnModule);
+</script>
+```
+
+Consulte `web/README.md` para a API, limitações e arquitetura.

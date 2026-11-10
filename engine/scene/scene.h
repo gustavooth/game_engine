@@ -32,6 +32,7 @@ EGNAPI void egn_object_set_parent(void *object, void *parent);
 EGNAPI u32 egn_object_child_count(void *object);
 EGNAPI void *egn_object_child_at(void *object, u32 index);
 
+EGNAPI void egn_object_get_world_matrix(void *object, f32 *out_matrix16);
 EGNAPI void egn_object_set_position(void *object, f32 x, f32 y, f32 z);
 EGNAPI void egn_object_get_position(void *object, f32 *x, f32 *y, f32 *z);
 

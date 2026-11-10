@@ -39,6 +39,8 @@ typedef int32_t b32;
 #ifndef _WIN64
 #error "64-bit is required on Windows!"
 #endif
+#elif defined(__EMSCRIPTEN__)
+#define EGNPLATFORM_WEB 1
 #elif defined(__linux__) || defined(__gnu_linux__)
 #define EGNPLATFORM_LINUX 1
 #define EGNPLATFORM_WAYLAND

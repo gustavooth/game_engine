@@ -449,6 +449,18 @@ void *egn_object_child_at(void *handle, u32 index)
   return 0;
 }
 
+void egn_object_get_world_matrix(void *object_handle, f32 *out_matrix16)
+{
+  EgnObject *object = egn_object_from_handle(object_handle);
+  if (!object || !out_matrix16)
+    return;
+
+  mat4 world;
+  egn_object_get_world_matrix_internal(object, &world);
+  for (u32 i = 0; i < 16; i++)
+    out_matrix16[i] = world.data[i];
+}
+
 void egn_object_set_position(void *handle, f32 x, f32 y, f32 z)
 {
   EgnObject *object = egn_object_from_handle(handle);
