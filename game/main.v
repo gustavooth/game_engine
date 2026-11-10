@@ -35,8 +35,7 @@ import egn {
 //   WASD ........ walk (W/S along the view direction, A/D strafe)
 //   Space/Ctrl .. move up/down
 //   Mouse ....... look (click to capture the pointer)
-//   Esc ......... release the pointer
-//   Q ........... quit
+//   Esc ......... quit
 //   F1 .......... toggle vsync
 //   F2 .......... cycle FPS cap (off / 60 / 120 / 144)
 //   F12 ......... save a screenshot
@@ -334,18 +333,11 @@ fn main() {
 		}
 
 		if app.key_pressed(.escape) {
-			want_lock = false
-			if app.pointer_locked() {
-				app.set_pointer_lock(false)
-			}
-			log_info('pointer released - click to recapture')
+			app.quit()
 		}
 		if app.mouse_pressed(.left) && !app.pointer_locked() {
 			want_lock = true
 			app.set_pointer_lock(true)
-		}
-		if app.key_pressed(.q) {
-			app.quit()
 		}
 
 		if app.key_pressed(.f1) {

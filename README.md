@@ -248,7 +248,7 @@ O jogo de demonstração em [`game/main.v`](game/main.v) mostra:
 - sprite exclusivo da layer 2 (só a câmera esquerda) e da layer 3 (só a
   direita);
 - clear color/depth independente por câmera;
-- **F12** salva um screenshot e **Q**/**Esc** saem.
+- **F12** salva um screenshot e **Esc** sai.
 
 ## Componentes
 
@@ -392,8 +392,7 @@ Controles:
 | `Space` / `Ctrl` | subir / descer |
 | `Shift` | correr |
 | mouse | olhar (clique captura o ponteiro) |
-| `Esc` | libera o ponteiro |
-| `Q` | encerra |
+| `Esc` | encerra o jogo |
 | `F1` | alterna vsync |
 | `F2` | alterna limite de FPS (off/60/120/144) |
 | `F12` | salva `screenshot.png` |
