@@ -262,6 +262,15 @@ EGNAPI void egn_model_get_pbr(void *model, f32 *metallic, f32 *roughness);
 // Water enables the animated water shading path (waves, fresnel, sun glint).
 EGNAPI b8 egn_model_set_water(void *model, b8 water);
 EGNAPI b8 egn_model_get_water(void *model);
+// Procedural surface shading. TERRAIN blends grass/rock/sand/snow from world
+// height, slope and the mesh UVs (u = sand weight, v = rock weight). OCEAN
+// shades depth-tinted water with waves and shore foam (u = water depth in
+// metres, v = wave scale: 1 open sea, 0 calm lake).
+#define EGN_MODEL_SURFACE_STANDARD 0u
+#define EGN_MODEL_SURFACE_TERRAIN 1u
+#define EGN_MODEL_SURFACE_OCEAN 2u
+EGNAPI b8 egn_model_set_surface(void *model, u32 surface);
+EGNAPI u32 egn_model_get_surface(void *model);
 EGNAPI void egn_model_set_mesh(void *model, u32 mesh);
 EGNAPI u32 egn_model_get_texture(void *model);
 EGNAPI void egn_model_set_texture(void *model, u32 texture);

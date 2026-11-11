@@ -64,8 +64,9 @@ typedef int32_t b32;
 #endif
 #endif
 
-#define EGNCLAMP(value, min, max) (value <= min) ? min : (value >= max) ? max \
-                                                                        : value;
+#define EGNCLAMP(value, min, max) (((value) <= (min)) ? (min) : ((value) >= (max)) ? (max) : (value))
+#define EGNMIN(a, b) (((a) < (b)) ? (a) : (b))
+#define EGNMAX(a, b) (((a) > (b)) ? (a) : (b))
 
 // Inlining
 #ifdef _MSC_VER

@@ -29,6 +29,11 @@ EGNAPI void linear_allocator_destroy(LinearAllocator *allocator)
 
 EGNAPI void *linear_allocator_allocate(LinearAllocator *allocator, u64 size)
 {
+  if (!allocator || !allocator->memory)
+  {
+    EGNERROR("linear_allocator_allocate: allocator is null or was not created.");
+    return 0;
+  }
   u64 remaining = allocator->total_size - allocator->allocated;
 
   if (remaining < size)

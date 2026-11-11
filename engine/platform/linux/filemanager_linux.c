@@ -89,35 +89,57 @@ EGNAPI b8 filemanager_check(const char *path, PathObjectType type)
 
 b8 filemanager_create_directory(const char *path, b8 sub_dir)
 {
-  if (mkdir(path, S_IRWXU) != 0)
+  if (!path || path[0] == '\0')
+    return false;
+
+  // The original test was inverted (it reported success when mkdir failed).
+  if (mkdir(path, S_IRWXU) == 0 || filemanager_check(path, PATH_OBJECT_TYPE_DIR))
     return true;
   if (!sub_dir)
     return false;
 
+  // Create every missing parent, then the directory itself.
   char tmp[1024];
-  u64 len = string_length(path);
-  MEMOCPY(tmp, path, len + 1);
+  u64 length = string_length(path);
+  if (length >= sizeof(tmp))
+    return false;
+  MEMOCPY(tmp, path, length + 1);
 
-  u64 path_len = STRLEN(path);
-  for (u32 i = 0; i < path_len; i++)
+  for (u64 i = 1; i < length; i++)
   {
-    if (path[i] == '/')
-    {
-      tmp[i] = '\0';
-      if (!filemanager_exist(tmp))
-        if (!filemanager_create_directory(tmp, false))
-          return false;
-      tmp[i] = '/';
-    }
+    if (tmp[i] != '/')
+      continue;
+    tmp[i] = '\0';
+    if (mkdir(tmp, S_IRWXU) != 0 && !filemanager_check(tmp, PATH_OBJECT_TYPE_DIR))
+      return false;
+    tmp[i] = '/';
   }
 
-  return true;
+  return mkdir(path, S_IRWXU) == 0 || filemanager_check(path, PATH_OBJECT_TYPE_DIR);
 }
 
 b8 filemanager_open_file(const char *path, b8 create_dir, b8 force_new, FileHandle *out_file)
 {
-  if (create_dir && (!filemanager_check(path, PATH_OBJECT_TYPE_DIR)))
-    filemanager_create_directory(path, true);
+  if (!path || !out_file)
+    return false;
+
+  if (create_dir)
+  {
+    // Create the directory that will contain the file. The path itself used
+    // to be created as a directory, which then made opening the file fail.
+    char parent[1024];
+    u64 length = string_length(path);
+    if (length < sizeof(parent))
+    {
+      MEMOCPY(parent, path, length + 1);
+      char *last_slash = strrchr(parent, '/');
+      if (last_slash && last_slash != parent)
+      {
+        *last_slash = '\0';
+        filemanager_create_directory(parent, true);
+      }
+    }
+  }
 
   FILE *file = 0;
   if (filemanager_exist(path) && !force_new)
@@ -130,6 +152,7 @@ b8 filemanager_open_file(const char *path, b8 create_dir, b8 force_new, FileHand
 
   out_file->handle = file;
   out_file->path = path;
+
   return true;
 }
 
@@ -146,8 +169,13 @@ u64 filemanager_get_file_length(FileHandle *handle)
 
 u64 filemanager_read(FileHandle *handle, u8 *dest, u64 start, u64 end)
 {
-  fseek(handle->handle, start, SEEK_SET);
-  return fread(dest, 1, end, handle->handle);
+  if (!handle || !handle->handle || !dest || end <= start)
+    return 0;
+  if (fseek(handle->handle, (long)start, SEEK_SET) != 0)
+    return 0;
+  // [start, end) is a byte range; the count used to be `end`, which read past
+  // the caller's buffer whenever start was not zero.
+  return fread(dest, 1, end - start, handle->handle);
 }
 
 b8 filemanager_read_all(const char *path, u8 **out_buffer_ptr, u64 *out_length)
@@ -163,23 +191,34 @@ b8 filemanager_read_all(const char *path, u8 **out_buffer_ptr, u64 *out_length)
   if (file == 0)
     return false;
 
-  fseek(file, 0, SEEK_END);
-  u64 len = (u64)ftell(file);
-  u8 *buffer = MEMOALLOC(len, MEMO_FILE);
-
-  fseek(file, 0, SEEK_SET);
-  u64 bytes_read = fread(buffer, 1, len, file);
-
-  if (bytes_read != len){
+  long size = -1;
+  if (fseek(file, 0, SEEK_END) == 0)
+    size = ftell(file);
+  if (size < 0 || fseek(file, 0, SEEK_SET) != 0)
+  {
     fclose(file);
+    return false;
+  }
+
+  u64 len = (u64)size;
+  // Never hand out a null buffer for an empty file.
+  u8 *buffer = MEMOALLOC(len > 0 ? len : 1, MEMO_FILE);
+  if (!buffer)
+  {
+    fclose(file);
+    return false;
+  }
+
+  u64 bytes_read = len > 0 ? fread(buffer, 1, len, file) : 0;
+  fclose(file);
+  if (bytes_read != len)
+  {
     MEMOFREE(buffer);
     return false;
   }
 
   *out_buffer_ptr = buffer;
   *out_length = len;
-
-  fclose(file);
   return true;
 }
 

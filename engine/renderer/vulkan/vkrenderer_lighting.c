@@ -9,7 +9,7 @@
 
 static VkRendererLighting current_lighting;
 
-typedef char VkRendererLighting_size_check[(sizeof(VkRendererLighting) == 672) ? 1 : -1];
+typedef char VkRendererLighting_size_check[(sizeof(VkRendererLighting) == 752) ? 1 : -1];
 
 static u32 lighting_frame_index(VkContext *ctx)
 {
@@ -126,22 +126,32 @@ static b8 create_shadow_resources(VkContext *ctx)
   subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
   subpass.pDepthStencilAttachment = &depth_reference;
 
-  VkSubpassDependency dependency = {0};
-  dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-  dependency.dstSubpass = 0;
-  dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-  dependency.dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-  dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-  dependency.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  // [0] waits for the previous frame's sampling before clearing the map,
+  // [1] makes the scene pass sampling wait for this pass' depth writes.
+  VkSubpassDependency dependencies[2];
+  MEMOZERO(dependencies, sizeof(dependencies));
+  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependencies[0].dstSubpass = 0;
+  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+  dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  dependencies[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  dependencies[1].srcSubpass = 0;
+  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
   VkRenderPassCreateInfo renderpass_info = {VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
   renderpass_info.attachmentCount = 1;
   renderpass_info.pAttachments = &depth_attachment;
   renderpass_info.subpassCount = 1;
   renderpass_info.pSubpasses = &subpass;
-  renderpass_info.dependencyCount = 1;
-  renderpass_info.pDependencies = &dependency;
+  renderpass_info.dependencyCount = 2;
+  renderpass_info.pDependencies = dependencies;
   VKCHECK(vkCreateRenderPass(ctx->device.handle, &renderpass_info, ctx->allocator,
                              &ctx->shadow_renderpass))
 
@@ -203,8 +213,14 @@ b8 vkrenderer_lighting_create(VkContext *ctx)
   if (!create_shadow_resources(ctx))
     return false;
 
-  VkDescriptorSetLayoutBinding bindings[1 + VKRENDERER_MAX_SHADOW_CASCADES];
+  VkDescriptorSetLayoutBinding bindings[2 + VKRENDERER_MAX_SHADOW_CASCADES];
   MEMOZERO(bindings, sizeof(bindings));
+
+  // Sky-view LUT, written by vkrenderer_lighting_set_sky_lut().
+  bindings[1 + VKRENDERER_MAX_SHADOW_CASCADES].binding = 1 + VKRENDERER_MAX_SHADOW_CASCADES;
+  bindings[1 + VKRENDERER_MAX_SHADOW_CASCADES].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  bindings[1 + VKRENDERER_MAX_SHADOW_CASCADES].descriptorCount = 1;
+  bindings[1 + VKRENDERER_MAX_SHADOW_CASCADES].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
   bindings[0].binding = 0;
   bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -220,7 +236,7 @@ b8 vkrenderer_lighting_create(VkContext *ctx)
   }
 
   VkDescriptorSetLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  layout_info.bindingCount = 1 + VKRENDERER_MAX_SHADOW_CASCADES;
+  layout_info.bindingCount = 2 + VKRENDERER_MAX_SHADOW_CASCADES;
   layout_info.pBindings = bindings;
   VKCHECK(vkCreateDescriptorSetLayout(ctx->device.handle, &layout_info, ctx->allocator,
                                       &ctx->lighting_set_layout))
@@ -229,7 +245,7 @@ b8 vkrenderer_lighting_create(VkContext *ctx)
   pool_sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   pool_sizes[0].descriptorCount = VKRENDERER_BONE_FRAMES;
   pool_sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  pool_sizes[1].descriptorCount = VKRENDERER_BONE_FRAMES * VKRENDERER_MAX_SHADOW_CASCADES;
+  pool_sizes[1].descriptorCount = VKRENDERER_BONE_FRAMES * (VKRENDERER_MAX_SHADOW_CASCADES + 1);
 
   VkDescriptorPoolCreateInfo pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   pool_info.maxSets = VKRENDERER_BONE_FRAMES;
@@ -267,6 +283,25 @@ b8 vkrenderer_lighting_create(VkContext *ctx)
 
   write_lighting_descriptors(ctx);
   return true;
+}
+
+void vkrenderer_lighting_set_sky_lut(VkContext *ctx, VkImageView view, VkSampler sampler)
+{
+  VkDescriptorImageInfo image_info = {0};
+  image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  image_info.imageView = view;
+  image_info.sampler = sampler;
+
+  for (u32 frame = 0; frame < VKRENDERER_BONE_FRAMES; frame++)
+  {
+    VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = ctx->lighting_sets[frame];
+    write.dstBinding = 1 + VKRENDERER_MAX_SHADOW_CASCADES;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &image_info;
+    vkUpdateDescriptorSets(ctx->device.handle, 1, &write, 0, 0);
+  }
 }
 
 void vkrenderer_lighting_apply_settings(VkContext *ctx)

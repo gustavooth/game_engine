@@ -108,9 +108,14 @@ static b8 set_nonblocking(i32 fd)
   return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
+// Sends the whole buffer. The sockets are non-blocking, so a full kernel
+// buffer reports EAGAIN: wait for it to drain (bounded) instead of giving up
+// halfway, which used to leave a truncated frame in the stream and corrupt
+// every message after it.
 static b8 send_all(i32 fd, const u8 *data, u64 size)
 {
   u64 sent = 0;
+  i32 waits = 0;
   while (sent < size)
   {
     ssize_t result = send(fd, data + sent, (size_t)(size - sent), MSG_NOSIGNAL);
@@ -118,6 +123,13 @@ static b8 send_all(i32 fd, const u8 *data, u64 size)
     {
       if (errno == EINTR)
         continue;
+      if ((errno == EAGAIN || errno == EWOULDBLOCK) && waits < 20)
+      {
+        struct pollfd descriptor = {fd, POLLOUT, 0};
+        poll(&descriptor, 1, 50);
+        waits++;
+        continue;
+      }
       return false;
     }
     if (result == 0)
@@ -129,73 +141,86 @@ static b8 send_all(i32 fd, const u8 *data, u64 size)
 
 static b8 tcp_send_message(i32 fd, const void *data, u32 size)
 {
-  u8 header[4];
-  u32 network_size = htonl(size);
-  MEMOCPY(header, &network_size, 4);
-  if (!send_all(fd, header, 4))
+  // The receiver rejects larger frames, so refuse them here.
+  if (size > EGN_NET_MESSAGE_MAX || (size > 0 && !data))
     return false;
-  return size == 0 || send_all(fd, (const u8 *)data, size);
+
+  // Header and payload go out in one buffer so a frame is never split
+  // between two partially failed sends.
+  u8 frame[4 + EGN_NET_MESSAGE_MAX];
+  u32 network_size = htonl(size);
+  MEMOCPY(frame, &network_size, 4);
+  if (size > 0)
+    MEMOCPY(frame + 4, data, size);
+  return send_all(fd, frame, 4 + (u64)size);
 }
 
-static void parse_tcp_stream(NetPeer *peer, NetEventQueue *events)
+typedef enum NetStreamResult
+{
+  NET_STREAM_OK = 0,     // nothing more to read for now
+  NET_STREAM_CLOSED = 1, // orderly shutdown by the remote side
+  NET_STREAM_ERROR = 2   // socket error or protocol violation
+} NetStreamResult;
+
+// Reads everything available from a TCP socket into `buffer` and emits one
+// MESSAGE event per complete length-prefixed frame. The buffer is larger than
+// the biggest valid frame, so there is always room to read after parsing; a
+// frame announcing more than EGN_NET_MESSAGE_MAX bytes is a protocol
+// violation and closes the connection (it used to be silently truncated or to
+// reset the buffer mid-stream, desynchronising all following frames).
+static NetStreamResult tcp_stream_receive(i32 fd, u8 *buffer, u32 capacity, u32 *length,
+                                          NetEventQueue *events, u32 id)
 {
   for (;;)
   {
-    if (peer->read_length < 4)
-      return;
+    if (*length >= capacity)
+      return NET_STREAM_ERROR;
 
-    u32 network_size = 0;
-    MEMOCPY(&network_size, peer->read_buffer, 4);
-    u32 message_size = ntohl(network_size);
-    if (message_size > EGN_NET_MESSAGE_MAX * 64)
+    ssize_t received = recv(fd, buffer + *length, capacity - *length, 0);
+    if (received == 0)
+      return NET_STREAM_CLOSED;
+    if (received < 0)
     {
-      peer->read_length = 0;
-      return;
+      if (errno == EINTR)
+        continue;
+      return (errno == EAGAIN || errno == EWOULDBLOCK) ? NET_STREAM_OK : NET_STREAM_ERROR;
+    }
+    *length += (u32)received;
+
+    u32 offset = 0;
+    while (*length - offset >= 4)
+    {
+      u32 network_size = 0;
+      MEMOCPY(&network_size, buffer + offset, 4);
+      u32 message_size = ntohl(network_size);
+      if (message_size > EGN_NET_MESSAGE_MAX)
+        return NET_STREAM_ERROR;
+      if (*length - offset < 4 + message_size)
+        break;
+      event_push(events, EGN_NET_EVENT_MESSAGE, id, buffer + offset + 4, message_size);
+      offset += 4 + message_size;
     }
 
-    u32 frame_size = 4 + message_size;
-    if (peer->read_length < frame_size)
-      return;
-
-    event_push(events, EGN_NET_EVENT_MESSAGE, peer->id,
-               peer->read_buffer + 4, message_size);
-
-    memmove(peer->read_buffer, peer->read_buffer + frame_size,
-             peer->read_length - frame_size);
-    peer->read_length -= frame_size;
+    // Compact once per read instead of once per message.
+    if (offset > 0)
+    {
+      memmove(buffer, buffer + offset, *length - offset);
+      *length -= offset;
+    }
   }
 }
 
 static void tcp_peer_receive(NetPeer *peer, NetEventQueue *events)
 {
-  u8 buffer[4096];
-  for (;;)
-  {
-    ssize_t received = recv(peer->fd, buffer, sizeof(buffer), 0);
-    if (received == 0)
-    {
-      event_push(events, EGN_NET_EVENT_DISCONNECTED, peer->id, 0, 0);
-      close(peer->fd);
-      MEMOZERO(peer, sizeof(NetPeer));
-      return;
-    }
+  NetStreamResult result = tcp_stream_receive(peer->fd, peer->read_buffer,
+                                              sizeof(peer->read_buffer),
+                                              &peer->read_length, events, peer->id);
+  if (result == NET_STREAM_OK)
+    return;
 
-    if (received < 0)
-    {
-      if (errno == EAGAIN || errno == EWOULDBLOCK)
-        return;
-      event_push(events, EGN_NET_EVENT_DISCONNECTED, peer->id, 0, 0);
-      close(peer->fd);
-      MEMOZERO(peer, sizeof(NetPeer));
-      return;
-    }
-
-    if (peer->read_length + (u32)received > sizeof(peer->read_buffer))
-      peer->read_length = 0;
-    MEMOCPY(peer->read_buffer + peer->read_length, buffer, (u64)received);
-    peer->read_length += (u32)received;
-    parse_tcp_stream(peer, events);
-  }
+  event_push(events, EGN_NET_EVENT_DISCONNECTED, peer->id, 0, 0);
+  close(peer->fd);
+  MEMOZERO(peer, sizeof(NetPeer));
 }
 
 static b8 resolve_ipv4(const char *host, u16 port, struct sockaddr_in *out_address)
@@ -279,9 +304,11 @@ void egn_net_server_destroy(EgnNetServer *server)
   if (!server)
     return;
 
+  // UDP peers share the server socket; closing it once per peer could close
+  // an unrelated descriptor that reused the number in the meantime.
   for (u32 i = 0; i < EGN_NET_MAX_CLIENTS; i++)
   {
-    if (server->peers[i].used)
+    if (server->peers[i].used && !server->udp)
       close(server->peers[i].fd);
   }
 
@@ -409,6 +436,8 @@ b8 egn_net_server_send(EgnNetServer *server, u32 client_id, const void *data, u3
   if (!peer)
     return false;
 
+  if (size > EGN_NET_MESSAGE_MAX || (size > 0 && !data))
+    return false;
   if (server->udp)
     return sendto(server->socket, data, size, MSG_NOSIGNAL,
                   (struct sockaddr *)&peer->address, peer->address_length) >= 0;
@@ -519,58 +548,21 @@ void egn_net_client_poll(EgnNetClient *client)
     return;
   }
 
-  u8 buffer[4096];
-  for (;;)
+  NetStreamResult result = tcp_stream_receive(client->socket, client->read_buffer,
+                                              sizeof(client->read_buffer),
+                                              &client->read_length, &client->events, 0);
+  if (result != NET_STREAM_OK)
   {
-    ssize_t received = recv(client->socket, buffer, sizeof(buffer), 0);
-    if (received == 0)
-    {
-      client->connected = false;
-      event_push(&client->events, EGN_NET_EVENT_DISCONNECTED, 0, 0, 0);
-      return;
-    }
-    if (received < 0)
-    {
-      if (errno != EAGAIN && errno != EWOULDBLOCK)
-      {
-        client->connected = false;
-        event_push(&client->events, EGN_NET_EVENT_DISCONNECTED, 0, 0, 0);
-      }
-      return;
-    }
-
-    if (client->read_length + (u32)received > sizeof(client->read_buffer))
-      client->read_length = 0;
-    MEMOCPY(client->read_buffer + client->read_length, buffer, (u64)received);
-    client->read_length += (u32)received;
-
-    for (;;)
-    {
-      if (client->read_length < 4)
-        break;
-      u32 network_size = 0;
-      MEMOCPY(&network_size, client->read_buffer, 4);
-      u32 message_size = ntohl(network_size);
-      if (message_size > EGN_NET_MESSAGE_MAX * 64)
-      {
-        client->read_length = 0;
-        break;
-      }
-      u32 frame_size = 4 + message_size;
-      if (client->read_length < frame_size)
-        break;
-      event_push(&client->events, EGN_NET_EVENT_MESSAGE, 0,
-                 client->read_buffer + 4, message_size);
-      memmove(client->read_buffer, client->read_buffer + frame_size,
-               client->read_length - frame_size);
-      client->read_length -= frame_size;
-    }
+    client->connected = false;
+    event_push(&client->events, EGN_NET_EVENT_DISCONNECTED, 0, 0, 0);
   }
 }
 
 b8 egn_net_client_send(EgnNetClient *client, const void *data, u32 size)
 {
   if (!client || !client->connected)
+    return false;
+  if (size > EGN_NET_MESSAGE_MAX || (size > 0 && !data))
     return false;
   if (client->udp)
     return send(client->socket, data, size, MSG_NOSIGNAL) >= 0;

@@ -26,20 +26,31 @@ layout(location = 3) out vec3 v_world_position;
 
 void main()
 {
-  mat4 skin =
-      bone_buffer.bones[pc.bone_offset + in_joints.x] * in_weights.x +
-      bone_buffer.bones[pc.bone_offset + in_joints.y] * in_weights.y +
-      bone_buffer.bones[pc.bone_offset + in_joints.z] * in_weights.z +
-      bone_buffer.bones[pc.bone_offset + in_joints.w] * in_weights.w;
+  vec4 local_position = vec4(in_position, 1.0);
+  vec3 local_normal = in_normal;
 
-  vec4 skinned_position = skin * vec4(in_position, 1.0);
-  vec4 world_position = pc.model * skinned_position;
+  // Static meshes (bone_offset 0) skip the four bone matrix fetches.
+  if (pc.bone_offset != 0u)
+  {
+    mat4 skin =
+        bone_buffer.bones[pc.bone_offset + in_joints.x] * in_weights.x +
+        bone_buffer.bones[pc.bone_offset + in_joints.y] * in_weights.y +
+        bone_buffer.bones[pc.bone_offset + in_joints.z] * in_weights.z +
+        bone_buffer.bones[pc.bone_offset + in_joints.w] * in_weights.w;
+    local_position = skin * local_position;
+    local_normal = mat3(skin) * local_normal;
+  }
 
-  mat3 normal_matrix = transpose(inverse(mat3(pc.model)));
-  vec3 skinned_normal = mat3(skin) * in_normal;
+  vec4 world_position = pc.model * local_position;
 
-  gl_Position = pc.mvp * skinned_position;
-  v_normal = normal_matrix * skinned_normal;
+  // Normal matrix as the cofactor of the model matrix: the same direction as
+  // transpose(inverse(M)) without a per-vertex matrix inversion, and it stays
+  // correct under non-uniform scale.
+  mat3 m = mat3(pc.model);
+  mat3 normal_matrix = mat3(cross(m[1], m[2]), cross(m[2], m[0]), cross(m[0], m[1]));
+
+  gl_Position = pc.mvp * local_position;
+  v_normal = normal_matrix * local_normal;
   v_uv = in_uv;
   v_tint = pc.tint;
   v_world_position = world_position.xyz;

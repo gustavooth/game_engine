@@ -159,6 +159,9 @@ static void keyboard_leave(void *data, struct wl_keyboard *keyboard, u32 serial,
   (void)keyboard;
   (void)serial;
   (void)surface;
+  // Focus lost: the compositor will not deliver the release of keys that are
+  // still held, so release them now instead of leaving them stuck.
+  inputs_release_all();
 }
 
 static void keyboard_key(void *data, struct wl_keyboard *keyboard, u32 serial,

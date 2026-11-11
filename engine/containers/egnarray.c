@@ -40,7 +40,7 @@ egnarray _egnarray_extend(egnarray arr, u32 new_capacity)
   if (!new_arr) return arr;
   u32 *new_header = (u32 *)new_arr - EGNARRAY_FIELD_LENGTH;
 
-  MEMOCPY(new_arr, arr, header[EGNARRAY_LENGTH] * header[EGNARRAY_STRIDE]);
+  MEMOCPY(new_arr, arr, (u64)header[EGNARRAY_LENGTH] * header[EGNARRAY_STRIDE]);
   new_header[EGNARRAY_LENGTH] = header[EGNARRAY_LENGTH];
 
   egnarray_destroy(arr);
@@ -55,13 +55,16 @@ egnarray _egnarray_push(egnarray arr, void *value_ptr)
 
   if (header[EGNARRAY_CAPACITY] == header[EGNARRAY_LENGTH])
   {
-    if (header[EGNARRAY_CAPACITY] > (u32)-1 - EGNARRAY_DEFAULT_CAPACITY) return arr;
-    arr = _egnarray_extend(arr, header[EGNARRAY_CAPACITY] + EGNARRAY_DEFAULT_CAPACITY);
+    // Grow geometrically: a fixed increment made n pushes cost O(n^2) copies.
+    u32 capacity = header[EGNARRAY_CAPACITY];
+    u32 growth = capacity > EGNARRAY_DEFAULT_CAPACITY ? capacity : EGNARRAY_DEFAULT_CAPACITY;
+    if (capacity > (u32)-1 - growth) return arr;
+    arr = _egnarray_extend(arr, capacity + growth);
     header = (u32 *)arr - EGNARRAY_FIELD_LENGTH;
     if (header[EGNARRAY_CAPACITY] == header[EGNARRAY_LENGTH]) return arr;
   }
 
-  MEMOCPY((void *)((u64)arr + header[EGNARRAY_STRIDE] * header[EGNARRAY_LENGTH]), value_ptr, header[EGNARRAY_STRIDE]);
+  MEMOCPY((char *)arr + (u64)header[EGNARRAY_STRIDE] * header[EGNARRAY_LENGTH], value_ptr, header[EGNARRAY_STRIDE]);
   header[EGNARRAY_LENGTH] += 1;
 
   return arr;

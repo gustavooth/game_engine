@@ -11,6 +11,13 @@ typedef struct EngineSettings
   i32 window_pos_y;
   b8 vsync;
   i32 target_fps;
+  /**
+   * Server/headless mode: no window is created, no renderer (GPU/Vulkan) is
+   * initialized and nothing is drawn. Platform, logger, memory, events,
+   * inputs, scene and physics keep working, so the engine can run on machines
+   * without a display or GPU. target_fps then acts as the tick rate.
+   */
+  b8 headless;
 } EngineSettings;
 
 /**
@@ -27,8 +34,9 @@ typedef struct EngineSettings
 EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_ptr);
 
 /**
- * @brief Runs one frame: processes OS/window messages, updates inputs and
- * renders the current frame.
+ * @brief Runs one frame: processes OS/window messages, updates inputs, scene
+ * and physics and renders the current frame. In headless mode the window and
+ * rendering steps are skipped.
  *
  * @param instance_ptr Engine instance returned by engine_create_instance().
  * @return true while the engine should keep running, false when it must stop.
@@ -77,6 +85,9 @@ EGNAPI b8 engine_get_window_size(void *instance_ptr, i32 *out_width, i32 *out_he
  * @param instance_ptr Engine instance returned by engine_create_instance().
  */
 EGNAPI void engine_destroy_instance(void *instance_ptr);
+
+/** True when the engine was created with EngineSettings.headless. */
+EGNAPI b8 engine_is_headless(void *instance_ptr);
 
 /** Enables/disables vsync (recreates the swapchain when changed). */
 EGNAPI void engine_set_vsync(void *instance_ptr, b8 vsync);

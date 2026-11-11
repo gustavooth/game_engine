@@ -60,30 +60,43 @@ fn main(@builtin(local_invocation_id) localID: vec3u) {
     return;
   }
 
-  let low = f32(totalSamples) * 0.05;
-  let high = f32(totalSamples) * 0.95;
+  // Meter on the 15%..92% range of the histogram: the darkest pixels and the
+  // brightest ones (sun, emissives, highlights) do not drive the exposure.
+  let low = f32(totalSamples) * 0.15;
+  let high = f32(totalSamples) * 0.92;
   var cumulative = 0.0;
   var weightedLog = 0.0;
-  var count = 0u;
+  var count = 0.0;
   for (var i = 0; i < 256; i = i + 1) {
-    let binCount = atomicLoad(&histogram[i]);
-    let next = cumulative + f32(binCount);
-    if (next > low && cumulative < high) {
+    let binCount = f32(atomicLoad(&histogram[i]));
+    let next = cumulative + binCount;
+    // Portion of this bin that falls inside the metered range.
+    let inside = max(min(next, high) - max(cumulative, low), 0.0);
+    if (inside > 0.0) {
       let binLog = -12.0 + (f32(i) + 0.5) / 255.0 * 16.0;
-      weightedLog += binLog * f32(binCount);
-      count += binCount;
+      weightedLog += binLog * inside;
+      count += inside;
     }
     cumulative = next;
   }
 
-  if (count == 0u) {
+  if (count <= 0.0) {
     return;
   }
 
-  let averageLog = weightedLog / f32(count);
-  let targetExposure = exp2(clamp(log2(0.18) - averageLog, pc.params.z, pc.params.w));
-  let speed = 1.0 - exp(-max(pc.params.y, 0.0) * max(pc.params.x, 0.0));
-  exposureBuffer.exposure = mix(exposureBuffer.exposure, targetExposure, clamp(speed, 0.0, 1.0));
+  let averageLog = weightedLog / count;
+  // Expose the metered range slightly above middle grey: outdoor scenes read
+  // as sunlit instead of overcast.
+  let key = 0.20;
+  let targetExposure = exp2(clamp(log2(key) - averageLog, pc.params.z, pc.params.w));
+  var current = exposureBuffer.exposure;
+  if (!(current > 0.0) || current > 1.0e9) {
+    current = targetExposure;
+  }
+  // The eye adapts to bright light faster than to darkness.
+  let rate = select(pc.params.y, pc.params.y * 1.6, targetExposure < current);
+  let speed = 1.0 - exp(-max(rate, 0.0) * max(pc.params.x, 0.0));
+  exposureBuffer.exposure = mix(current, targetExposure, clamp(speed, 0.0, 1.0));
   exposureBuffer.averageLuminance = exp2(averageLog);
   exposureBuffer.targetExposure = targetExposure;
 }

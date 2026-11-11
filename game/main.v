@@ -1,6 +1,7 @@
 module main
 
 import math
+import os
 import egn {
 	Animation,
 	Camera,
@@ -466,7 +467,27 @@ fn main() {
 
 	mut preset_index := 3
 	presets := [GraphicsPreset.low, .medium, .high, .ultra]
+
+	// Benchmark/capture mode: `EGN_AUTOSHOT=<seconds> ./game` renders for the
+	// given time, logs the average FPS, saves screenshot.png and quits.
+	autoshot_seconds := os.getenv('EGN_AUTOSHOT').f64()
+	mut autoshot_frames := 0
+	mut autoshot_requested := false
+	if autoshot_seconds > 0.0 {
+		want_lock = false
+	}
 	for app.should_run() {
+		if autoshot_seconds > 0.0 {
+			autoshot_frames++
+			now := app.elapsed_time()
+			if !autoshot_requested && now >= autoshot_seconds {
+				log_info('autoshot: ${autoshot_frames} frames in ${now:.2f}s = ${f64(autoshot_frames) / now:.1f} fps')
+				app.screenshot('screenshot.png')
+				autoshot_requested = true
+			} else if autoshot_requested && now >= autoshot_seconds + 0.25 {
+				app.quit()
+			}
+		}
 
 		// Keep trying until the compositor grants the pointer lock (it needs
 		// an input serial, which usually arrives with pointer-enter).

@@ -222,5 +222,8 @@ void vkrenderer_screenshot_shutdown(VkContext *ctx)
 
 EGNAPI b8 renderer_screenshot(const char *path)
 {
+  VkContext *ctx = vkrenderer_get_context();
+  if (!ctx || !ctx->device.handle)
+    return false;
   return vkrenderer_screenshot_request(path);
 }

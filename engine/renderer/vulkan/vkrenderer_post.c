@@ -28,21 +28,25 @@ typedef struct PostPushConstants
 
 typedef char PostPushConstants_size_check[(sizeof(PostPushConstants) == 128) ? 1 : -1];
 
+// Pushed as constants (not a shared UBO) so a frame still in flight never
+// sees the matrices of the next one.
 typedef struct EffectsParams
 {
   mat4 inverse_view_projection;
   mat4 view_projection;
   vec4 camera_position;
   vec4 params;  // ao radius, ao intensity, gi intensity, gi distance
-  vec4 params2; // sample count, width, height, flags
+  vec4 params2; // sample count, projection scale y, aspect, flags
 } EffectsParams;
 
 typedef char EffectsParams_size_check[(sizeof(EffectsParams) == 176) ? 1 : -1];
 
+#define BLOOM_MAX_MIPS 7
+
 typedef struct BloomPushConstants
 {
-  vec4 params;  // direction xy, threshold, unused
-  vec4 params2; // texel size xy, radius, threshold enabled
+  vec4 params;  // source texel size xy, mode, upsample radius
+  vec4 params2; // threshold, knee, firefly clamp, unused
 } BloomPushConstants;
 
 typedef char BloomPushConstants_size_check[(sizeof(BloomPushConstants) == 32) ? 1 : -1];
@@ -79,22 +83,22 @@ typedef struct VkRendererPost
   VkDescriptorSetLayout effects_set_layout;
   VkDescriptorPool effects_pool;
   VkDescriptorSet effects_set;
-  VkBuffer effects_buffer;
-  VkDeviceMemory effects_memory;
-  void *effects_mapped;
   VkRendererShader effects_shader;
 
-  // Bloom: threshold + horizontal blur into image 0, vertical blur into 1.
-  VkRenderPass bloom_renderpass;
-  VkFramebuffer bloom_framebuffers[2];
-  VkRendererImage bloom_images[2];
+  // Bloom mip chain: mip 0 is half resolution, each next one half of that.
+  // The downsample pass overwrites a mip, the upsample pass adds onto it.
+  VkRenderPass bloom_renderpass;    // downsample: previous content discarded
+  VkRenderPass bloom_up_renderpass; // upsample: previous content kept
+  VkFramebuffer bloom_framebuffers[BLOOM_MAX_MIPS];
+  VkRendererImage bloom_images[BLOOM_MAX_MIPS];
   VkDescriptorSetLayout bloom_set_layout;
   VkDescriptorPool bloom_pool;
-  VkDescriptorSet bloom_sets[2];
+  VkDescriptorSet bloom_scene_set;            // samples the HDR scene
+  VkDescriptorSet bloom_sets[BLOOM_MAX_MIPS]; // samples each mip
   VkSampler bloom_sampler;
-  VkRendererShader bloom_shader;
-  u32 bloom_width;
-  u32 bloom_height;
+  VkRendererShader bloom_shader;    // downsample
+  VkRendererShader bloom_up_shader; // additive upsample
+  u32 bloom_mip_count;
 
   // Histogram-based auto exposure.
   VkDescriptorSetLayout exposure_set_layout;
@@ -207,7 +211,7 @@ static b8 create_effects_renderpass(VkContext *ctx)
   VkAttachmentDescription attachment = {0};
   attachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
   attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-  attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // every pixel is written
   attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
   attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
   attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -254,16 +258,17 @@ static b8 create_effects_renderpass(VkContext *ctx)
   return true;
 }
 
-static b8 create_bloom_renderpass(VkContext *ctx)
+static b8 create_bloom_renderpass(VkContext *ctx, b8 keep_contents, VkRenderPass *out_renderpass)
 {
   VkAttachmentDescription attachment = {0};
   attachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
   attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-  attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  attachment.loadOp = keep_contents ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
   attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
   attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
   attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  attachment.initialLayout = keep_contents ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                           : VK_IMAGE_LAYOUT_UNDEFINED;
   attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
   VkAttachmentReference reference = {0};
@@ -279,10 +284,13 @@ static b8 create_bloom_renderpass(VkContext *ctx)
   MEMOZERO(dependencies, sizeof(dependencies));
   dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
   dependencies[0].dstSubpass = 0;
-  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-  dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   dependencies[1].srcSubpass = 0;
   dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
   dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -297,15 +305,13 @@ static b8 create_bloom_renderpass(VkContext *ctx)
   info.pSubpasses = &subpass;
   info.dependencyCount = 2;
   info.pDependencies = dependencies;
-  if (vkCreateRenderPass(ctx->device.handle, &info, ctx->allocator,
-                         &post.bloom_renderpass) != VK_SUCCESS)
-    return false;
-  return true;
+  return vkCreateRenderPass(ctx->device.handle, &info, ctx->allocator,
+                            out_renderpass) == VK_SUCCESS;
 }
 
 static void destroy_bloom_targets(VkContext *ctx)
 {
-  for (u32 i = 0; i < 2; i++)
+  for (u32 i = 0; i < BLOOM_MAX_MIPS; i++)
   {
     if (post.bloom_framebuffers[i])
     {
@@ -314,21 +320,41 @@ static void destroy_bloom_targets(VkContext *ctx)
     }
     vkrenderer_destroy_image(ctx, &post.bloom_images[i]);
   }
-  post.bloom_width = 0;
-  post.bloom_height = 0;
+  post.bloom_mip_count = 0;
+}
+
+static void write_sampled_image(VkContext *ctx, VkDescriptorSet set, u32 binding,
+                                VkImageView view, VkSampler sampler)
+{
+  VkDescriptorImageInfo info = {0};
+  info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  info.imageView = view;
+  info.sampler = sampler;
+  VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+  write.dstSet = set;
+  write.dstBinding = binding;
+  write.descriptorCount = 1;
+  write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  write.pImageInfo = &info;
+  vkUpdateDescriptorSets(ctx->device.handle, 1, &write, 0, 0);
 }
 
 static b8 create_bloom_targets(VkContext *ctx)
 {
   u32 width = ctx->framebuffer_width / 2;
   u32 height = ctx->framebuffer_height / 2;
-  if (width == 0)
-    width = 1;
-  if (height == 0)
-    height = 1;
 
-  for (u32 i = 0; i < 2; i++)
+  u32 mip_count = 0;
+  for (u32 i = 0; i < BLOOM_MAX_MIPS; i++)
   {
+    if (width == 0)
+      width = 1;
+    if (height == 0)
+      height = 1;
+    // Stop once a mip gets too small to add anything useful.
+    if (i > 0 && (width < 4 || height < 4))
+      break;
+
     vkrenderer_image_create(ctx, VK_IMAGE_TYPE_2D, width, height,
                             VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
@@ -350,44 +376,23 @@ static b8 create_bloom_targets(VkContext *ctx)
                             &post.bloom_framebuffers[i]) != VK_SUCCESS)
       return false;
     clear_effects_image(ctx, &post.bloom_images[i]);
+
+    if (post.bloom_sets[i])
+      write_sampled_image(ctx, post.bloom_sets[i], 0, post.bloom_images[i].view,
+                          post.bloom_sampler);
+
+    mip_count++;
+    width /= 2;
+    height /= 2;
   }
+  post.bloom_mip_count = mip_count;
 
-  post.bloom_width = width;
-  post.bloom_height = height;
-
-  if (post.bloom_sets[0] && post.scene_color.view)
-  {
-    VkDescriptorImageInfo info = {0};
-    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    info.imageView = post.scene_color.view;
-    info.sampler = post.bloom_sampler;
-    VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = post.bloom_sets[0];
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &info;
-    vkUpdateDescriptorSets(ctx->device.handle, 1, &write, 0, 0);
-
-    info.imageView = post.bloom_images[0].view;
-    write.dstSet = post.bloom_sets[1];
-    vkUpdateDescriptorSets(ctx->device.handle, 1, &write, 0, 0);
-  }
+  if (post.bloom_scene_set && post.scene_color.view)
+    write_sampled_image(ctx, post.bloom_scene_set, 0, post.scene_color.view,
+                        post.bloom_sampler);
 
   if (post.set)
-  {
-    VkDescriptorImageInfo info = {0};
-    info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    info.imageView = post.bloom_images[1].view;
-    info.sampler = post.color_sampler;
-    VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = post.set;
-    write.dstBinding = 2;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &info;
-    vkUpdateDescriptorSets(ctx->device.handle, 1, &write, 0, 0);
-  }
+    write_sampled_image(ctx, post.set, 2, post.bloom_images[0].view, post.color_sampler);
 
   return true;
 }
@@ -479,54 +484,16 @@ static b8 create_effects_targets(VkContext *ctx)
   if (post.effects_set && post.scene_color.view && post.scene_normal.view &&
       post.scene_depth.view)
   {
-    VkDescriptorImageInfo images[3] = {0};
-    images[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    images[0].imageView = post.scene_color.view;
-    images[0].sampler = post.color_sampler;
-    images[1] = images[0];
-    images[1].imageView = post.scene_normal.view;
-    images[2] = images[0];
-    images[2].imageView = post.scene_depth.view;
-    images[2].sampler = post.effects_depth_sampler;
-
-    VkDescriptorBufferInfo buffer_info = {0};
-    buffer_info.buffer = post.effects_buffer;
-    buffer_info.range = sizeof(EffectsParams);
-
-    VkWriteDescriptorSet writes[4];
-    MEMOZERO(writes, sizeof(writes));
-    for (u32 i = 0; i < 3; i++)
-    {
-      writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-      writes[i].dstSet = post.effects_set;
-      writes[i].dstBinding = i;
-      writes[i].descriptorCount = 1;
-      writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-      writes[i].pImageInfo = &images[i];
-    }
-    writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[3].dstSet = post.effects_set;
-    writes[3].dstBinding = 3;
-    writes[3].descriptorCount = 1;
-    writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[3].pBufferInfo = &buffer_info;
-    vkUpdateDescriptorSets(ctx->device.handle, 4, writes, 0, 0);
+    write_sampled_image(ctx, post.effects_set, 0, post.scene_color.view, post.color_sampler);
+    // Normals are octahedral encoded and must not be filtered.
+    write_sampled_image(ctx, post.effects_set, 1, post.scene_normal.view,
+                        post.effects_depth_sampler);
+    write_sampled_image(ctx, post.effects_set, 2, post.scene_depth.view,
+                        post.effects_depth_sampler);
   }
 
   if (post.set)
-  {
-    VkDescriptorImageInfo effects_info = {0};
-    effects_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    effects_info.imageView = post.effects_image.view;
-    effects_info.sampler = post.color_sampler;
-    VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = post.set;
-    write.dstBinding = 1;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &effects_info;
-    vkUpdateDescriptorSets(ctx->device.handle, 1, &write, 0, 0);
-  }
+    write_sampled_image(ctx, post.set, 1, post.effects_image.view, post.color_sampler);
 
   return true;
 }
@@ -631,6 +598,9 @@ static b8 create_targets(VkContext *ctx)
     writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[1].pBufferInfo = &exposure_info;
     vkUpdateDescriptorSets(ctx->device.handle, 2, writes, 0, 0);
+
+    write_sampled_image(ctx, post.set, 5, post.scene_normal.view, post.effects_depth_sampler);
+    write_sampled_image(ctx, post.set, 6, post.scene_depth.view, post.effects_depth_sampler);
   }
 
   if (post.exposure_set)
@@ -665,8 +635,16 @@ static b8 create_targets(VkContext *ctx)
 
 static b8 create_descriptors(VkContext *ctx)
 {
-  VkDescriptorSetLayoutBinding bindings[5];
+  VkDescriptorSetLayoutBinding bindings[7];
   MEMOZERO(bindings, sizeof(bindings));
+  for (u32 i = 5; i < 7; i++)
+  {
+    // Scene normal/albedo and depth, for the depth-aware AO/GI upsample.
+    bindings[i].binding = i;
+    bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[i].descriptorCount = 1;
+    bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+  }
   for (u32 i = 0; i < 3; i++)
   {
     bindings[i].binding = i;
@@ -684,7 +662,7 @@ static b8 create_descriptors(VkContext *ctx)
   bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
   VkDescriptorSetLayoutCreateInfo layout_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  layout_info.bindingCount = 5;
+  layout_info.bindingCount = 7;
   layout_info.pBindings = bindings;
   if (vkCreateDescriptorSetLayout(ctx->device.handle, &layout_info, ctx->allocator,
                                   &post.set_layout) != VK_SUCCESS)
@@ -692,7 +670,7 @@ static b8 create_descriptors(VkContext *ctx)
 
   VkDescriptorPoolSize pool_sizes[2] = {0};
   pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  pool_sizes[0].descriptorCount = 4;
+  pool_sizes[0].descriptorCount = 6;
   pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
   pool_sizes[1].descriptorCount = 1;
 
@@ -756,7 +734,7 @@ static b8 create_descriptors(VkContext *ctx)
                       &post.effects_sampler) != VK_SUCCESS)
     return false;
 
-  VkDescriptorSetLayoutBinding effects_bindings[4];
+  VkDescriptorSetLayoutBinding effects_bindings[3];
   MEMOZERO(effects_bindings, sizeof(effects_bindings));
   for (u32 i = 0; i < 3; i++)
   {
@@ -765,28 +743,22 @@ static b8 create_descriptors(VkContext *ctx)
     effects_bindings[i].descriptorCount = 1;
     effects_bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
   }
-  effects_bindings[3].binding = 3;
-  effects_bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  effects_bindings[3].descriptorCount = 1;
-  effects_bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
   VkDescriptorSetLayoutCreateInfo effects_layout_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  effects_layout_info.bindingCount = 4;
+  effects_layout_info.bindingCount = 3;
   effects_layout_info.pBindings = effects_bindings;
   if (vkCreateDescriptorSetLayout(ctx->device.handle, &effects_layout_info, ctx->allocator,
                                   &post.effects_set_layout) != VK_SUCCESS)
     return false;
 
-  VkDescriptorPoolSize effects_pool_sizes[2] = {0};
-  effects_pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  effects_pool_sizes[0].descriptorCount = 3;
-  effects_pool_sizes[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  effects_pool_sizes[1].descriptorCount = 1;
+  VkDescriptorPoolSize effects_pool_size = {0};
+  effects_pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  effects_pool_size.descriptorCount = 3;
 
   VkDescriptorPoolCreateInfo effects_pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   effects_pool_info.maxSets = 1;
-  effects_pool_info.poolSizeCount = 2;
-  effects_pool_info.pPoolSizes = effects_pool_sizes;
+  effects_pool_info.poolSizeCount = 1;
+  effects_pool_info.pPoolSizes = &effects_pool_size;
   if (vkCreateDescriptorPool(ctx->device.handle, &effects_pool_info, ctx->allocator,
                              &post.effects_pool) != VK_SUCCESS)
     return false;
@@ -797,16 +769,6 @@ static b8 create_descriptors(VkContext *ctx)
   effects_allocate.pSetLayouts = &post.effects_set_layout;
   if (vkAllocateDescriptorSets(ctx->device.handle, &effects_allocate,
                                &post.effects_set) != VK_SUCCESS)
-    return false;
-
-  if (!vkrenderer_buffer_create(ctx, sizeof(EffectsParams),
-                                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                &post.effects_buffer, &post.effects_memory))
-    return false;
-  if (vkMapMemory(ctx->device.handle, post.effects_memory, 0, VK_WHOLE_SIZE, 0,
-                  &post.effects_mapped) != VK_SUCCESS)
     return false;
 
   VkDescriptorSetLayoutBinding bloom_binding = {0};
@@ -824,26 +786,29 @@ static b8 create_descriptors(VkContext *ctx)
 
   VkDescriptorPoolSize bloom_pool_size = {0};
   bloom_pool_size.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-  bloom_pool_size.descriptorCount = 2;
+  bloom_pool_size.descriptorCount = BLOOM_MAX_MIPS + 1;
   VkDescriptorPoolCreateInfo bloom_pool_info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-  bloom_pool_info.maxSets = 2;
+  bloom_pool_info.maxSets = BLOOM_MAX_MIPS + 1;
   bloom_pool_info.poolSizeCount = 1;
   bloom_pool_info.pPoolSizes = &bloom_pool_size;
   if (vkCreateDescriptorPool(ctx->device.handle, &bloom_pool_info, ctx->allocator,
                              &post.bloom_pool) != VK_SUCCESS)
     return false;
 
-  VkDescriptorSetLayout bloom_layouts[2] = {
-      post.bloom_set_layout,
-      post.bloom_set_layout,
-  };
+  VkDescriptorSetLayout bloom_layouts[BLOOM_MAX_MIPS + 1];
+  VkDescriptorSet bloom_allocated[BLOOM_MAX_MIPS + 1];
+  for (u32 i = 0; i < BLOOM_MAX_MIPS + 1; i++)
+    bloom_layouts[i] = post.bloom_set_layout;
   VkDescriptorSetAllocateInfo bloom_allocate = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
   bloom_allocate.descriptorPool = post.bloom_pool;
-  bloom_allocate.descriptorSetCount = 2;
+  bloom_allocate.descriptorSetCount = BLOOM_MAX_MIPS + 1;
   bloom_allocate.pSetLayouts = bloom_layouts;
   if (vkAllocateDescriptorSets(ctx->device.handle, &bloom_allocate,
-                               post.bloom_sets) != VK_SUCCESS)
+                               bloom_allocated) != VK_SUCCESS)
     return false;
+  post.bloom_scene_set = bloom_allocated[0];
+  for (u32 i = 0; i < BLOOM_MAX_MIPS; i++)
+    post.bloom_sets[i] = bloom_allocated[i + 1];
 
   sampler_info.magFilter = VK_FILTER_LINEAR;
   sampler_info.minFilter = VK_FILTER_LINEAR;
@@ -910,7 +875,8 @@ b8 vkrenderer_post_create(VkContext *ctx)
     return false;
   if (!create_effects_renderpass(ctx))
     return false;
-  if (!create_bloom_renderpass(ctx))
+  if (!create_bloom_renderpass(ctx, false, &post.bloom_renderpass) ||
+      !create_bloom_renderpass(ctx, true, &post.bloom_up_renderpass))
     return false;
   if (!create_descriptors(ctx))
     return false;
@@ -946,7 +912,7 @@ b8 vkrenderer_post_create(VkContext *ctx)
   effects_params.frag_path = "shaders/effects.frag.spv";
   effects_params.set_layouts = &post.effects_set_layout;
   effects_params.set_layout_count = 1;
-  effects_params.push_constant_size = 0;
+  effects_params.push_constant_size = sizeof(EffectsParams);
   effects_params.depth_test = false;
   effects_params.depth_write = false;
   effects_params.blending = false;
@@ -976,6 +942,14 @@ b8 vkrenderer_post_create(VkContext *ctx)
   if (!vkrenderer_shader_create(ctx, &bloom_params, &post.bloom_shader))
   {
     EGNERROR("VKRENDERER failed to create the bloom pipeline");
+    return false;
+  }
+  bloom_params.blending = true;
+  bloom_params.additive = true;
+  bloom_params.render_pass = post.bloom_up_renderpass;
+  if (!vkrenderer_shader_create(ctx, &bloom_params, &post.bloom_up_shader))
+  {
+    EGNERROR("VKRENDERER failed to create the bloom upsample pipeline");
     return false;
   }
 
@@ -1144,50 +1118,38 @@ static void render_exposure(VkContext *ctx, VkRendererCommandBuffer *command_buf
                        0, 0, 0, 1, &barrier, 0, 0);
 }
 
-static void bloom_pass(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
-                       u32 target, VkDescriptorSet source, vec2 direction,
-                       f32 threshold, u32 radius, b8 apply_threshold)
+static void bloom_pass(VkRendererCommandBuffer *command_buffer, u32 target,
+                       VkDescriptorSet source, u32 source_width, u32 source_height,
+                       u32 mode, f32 radius, f32 threshold)
 {
-  VkClearValue clear;
-  MEMOZERO(&clear, sizeof(clear));
-  clear.color.float32[3] = 1.0f;
+  b8 upsample = mode == 2;
+  VkRendererShader *shader = upsample ? &post.bloom_up_shader : &post.bloom_shader;
+  u32 width = post.bloom_images[target].width;
+  u32 height = post.bloom_images[target].height;
 
   VkRenderPassBeginInfo info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-  info.renderPass = post.bloom_renderpass;
+  info.renderPass = upsample ? post.bloom_up_renderpass : post.bloom_renderpass;
   info.framebuffer = post.bloom_framebuffers[target];
-  info.renderArea.extent.width = post.bloom_width;
-  info.renderArea.extent.height = post.bloom_height;
-  info.clearValueCount = 1;
-  info.pClearValues = &clear;
+  info.renderArea.extent.width = width;
+  info.renderArea.extent.height = height;
   vkCmdBeginRenderPass(command_buffer->handle, &info, VK_SUBPASS_CONTENTS_INLINE);
 
-  VkViewport viewport;
-  viewport.x = 0.0f;
-  viewport.y = 0.0f;
-  viewport.width = (f32)post.bloom_width;
-  viewport.height = (f32)post.bloom_height;
-  viewport.minDepth = 0.0f;
-  viewport.maxDepth = 1.0f;
-  VkRect2D scissor;
-  scissor.offset.x = 0;
-  scissor.offset.y = 0;
-  scissor.extent.width = post.bloom_width;
-  scissor.extent.height = post.bloom_height;
+  VkViewport viewport = {0.0f, 0.0f, (f32)width, (f32)height, 0.0f, 1.0f};
+  VkRect2D scissor = {{0, 0}, {width, height}};
   vkCmdSetViewport(command_buffer->handle, 0, 1, &viewport);
   vkCmdSetScissor(command_buffer->handle, 0, 1, &scissor);
 
   BloomPushConstants push;
   MEMOZERO(&push, sizeof(push));
-  push.params = vec4_create(direction.x, direction.y, threshold, 0.0f);
-  push.params2 = vec4_create(1.0f / (f32)post.bloom_width,
-                             1.0f / (f32)post.bloom_height,
-                             (f32)radius, apply_threshold ? 1.0f : 0.0f);
+  push.params = vec4_create(1.0f / (f32)source_width, 1.0f / (f32)source_height,
+                            (f32)mode, radius);
+  push.params2 = vec4_create(threshold, threshold * 0.5f, threshold * 48.0f + 16.0f, 0.0f);
 
   vkCmdBindPipeline(command_buffer->handle, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    post.bloom_shader.pipeline.handle);
+                    shader->pipeline.handle);
   vkCmdBindDescriptorSets(command_buffer->handle, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          post.bloom_shader.pipeline.layout, 0, 1, &source, 0, 0);
-  vkCmdPushConstants(command_buffer->handle, post.bloom_shader.pipeline.layout,
+                          shader->pipeline.layout, 0, 1, &source, 0, 0);
+  vkCmdPushConstants(command_buffer->handle, shader->pipeline.layout,
                      VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                      0, sizeof(push), &push);
   vkCmdDraw(command_buffer->handle, 3, 1, 0, 0);
@@ -1195,25 +1157,55 @@ static void bloom_pass(VkContext *ctx, VkRendererCommandBuffer *command_buffer,
   command_buffer->state = VKRENDERER_STATE_RECORDING;
 }
 
+static u32 bloom_mips(const RendererGraphicsSettings *settings)
+{
+  u32 mips = 6;
+  if (settings->bloom_quality == RENDERER_QUALITY_LOW)
+    mips = 4;
+  else if (settings->bloom_quality == RENDERER_QUALITY_MEDIUM)
+    mips = 5;
+  else if (settings->bloom_quality == RENDERER_QUALITY_ULTRA)
+    mips = BLOOM_MAX_MIPS;
+  return mips < post.bloom_mip_count ? mips : post.bloom_mip_count;
+}
+
 static void render_bloom(VkContext *ctx, VkRendererCommandBuffer *command_buffer)
 {
+  (void)ctx;
   RendererGraphicsSettings settings = renderer_get_active_graphics_settings();
   if (!settings.bloom_enabled || !post.bloom_shader.pipeline.handle ||
-      !post.bloom_framebuffers[0] || !post.bloom_sets[0])
+      !post.bloom_up_shader.pipeline.handle || post.bloom_mip_count == 0 ||
+      !post.bloom_scene_set)
     return;
 
-  u32 radius = 4;
-  if (settings.bloom_quality == RENDERER_QUALITY_LOW)
-    radius = 2;
-  else if (settings.bloom_quality == RENDERER_QUALITY_MEDIUM)
-    radius = 3;
-  else if (settings.bloom_quality == RENDERER_QUALITY_ULTRA)
-    radius = 5;
+  u32 mips = bloom_mips(&settings);
 
-  bloom_pass(ctx, command_buffer, 0, post.bloom_sets[0], vec2_create(1.0f, 0.0f),
-             settings.bloom_threshold, radius, true);
-  bloom_pass(ctx, command_buffer, 1, post.bloom_sets[1], vec2_create(0.0f, 1.0f),
-             0.0f, radius, false);
+  // The threshold is authored for an exposed image (1.0 = display white), so
+  // convert it to scene units with the exposure of the previous frame.
+  f32 exposure = exp2f(settings.exposure_compensation);
+  if (settings.auto_exposure_enabled && post.exposure_mapped)
+  {
+    f32 adapted = ((const f32 *)post.exposure_mapped)[0];
+    if (adapted > 0.0001f && adapted < 100000.0f)
+      exposure *= adapted;
+  }
+  f32 threshold = settings.bloom_threshold / exposure;
+
+  // Downsample chain: scene -> mip 0 (thresholded) -> mip 1 -> ...
+  bloom_pass(command_buffer, 0, post.bloom_scene_set, post.width, post.height,
+             0, 0.0f, threshold);
+  for (u32 mip = 1; mip < mips; mip++)
+    bloom_pass(command_buffer, mip, post.bloom_sets[mip - 1],
+               post.bloom_images[mip - 1].width, post.bloom_images[mip - 1].height,
+               1, 0.0f, 0.0f);
+
+  // Upsample chain: each mip is blurred and added onto the next larger one,
+  // so mip 0 ends up holding the sum of every blur radius.
+  f32 radius = 0.6f + settings.bloom_radius;
+  for (u32 mip = mips - 1; mip > 0; mip--)
+    bloom_pass(command_buffer, mip - 1, post.bloom_sets[mip],
+               post.bloom_images[mip].width, post.bloom_images[mip].height,
+               2, radius, 0.0f);
 }
 
 static void update_post_lut(VkContext *ctx, const RendererGraphicsSettings *settings)
@@ -1268,13 +1260,16 @@ static void render_effects(VkContext *ctx, VkRendererCommandBuffer *command_buff
   RendererGraphicsSettings settings = renderer_get_active_graphics_settings();
   if (!settings.ao_enabled && !settings.gi_enabled)
     return;
-  if (!post.effects_mapped || !post.effects_set || !post.effects_framebuffer ||
+  if (!post.effects_set || !post.effects_framebuffer ||
       !post.effects_shader.pipeline.handle)
     return;
 
   mat4 view_projection;
   vec3 camera_position;
-  if (!vkrenderer_scene_primary_camera(ctx, &view_projection, &camera_position))
+  f32 projection_scale = 1.0f;
+  f32 aspect = 1.0f;
+  if (!vkrenderer_scene_primary_camera(ctx, &view_projection, &camera_position) ||
+      !vkrenderer_scene_primary_projection(&projection_scale, &aspect))
     return;
 
   EffectsParams params;
@@ -1290,36 +1285,19 @@ static void render_effects(VkContext *ctx, VkRendererCommandBuffer *command_buff
     quality = settings.gi_quality;
   u32 effect_flags = (settings.ao_enabled ? 1u : 0u) |
                      (settings.gi_enabled ? 2u : 0u);
-  params.params2 = vec4_create((f32)effects_samples(quality),
-                               (f32)post.effects_width,
-                               (f32)post.effects_height, (f32)effect_flags);
-  MEMOCPY(post.effects_mapped, &params, sizeof(params));
-
-  VkClearValue clear;
-  MEMOZERO(&clear, sizeof(clear));
-  clear.color.float32[3] = 1.0f;
+  params.params2 = vec4_create((f32)effects_samples(quality), projection_scale,
+                               aspect, (f32)effect_flags);
 
   VkRenderPassBeginInfo info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
   info.renderPass = post.effects_renderpass;
   info.framebuffer = post.effects_framebuffer;
   info.renderArea.extent.width = post.effects_width;
   info.renderArea.extent.height = post.effects_height;
-  info.clearValueCount = 1;
-  info.pClearValues = &clear;
   vkCmdBeginRenderPass(command_buffer->handle, &info, VK_SUBPASS_CONTENTS_INLINE);
 
-  VkViewport viewport;
-  viewport.x = 0.0f;
-  viewport.y = 0.0f;
-  viewport.width = (f32)post.effects_width;
-  viewport.height = (f32)post.effects_height;
-  viewport.minDepth = 0.0f;
-  viewport.maxDepth = 1.0f;
-  VkRect2D scissor;
-  scissor.offset.x = 0;
-  scissor.offset.y = 0;
-  scissor.extent.width = post.effects_width;
-  scissor.extent.height = post.effects_height;
+  VkViewport viewport = {0.0f, 0.0f, (f32)post.effects_width, (f32)post.effects_height,
+                         0.0f, 1.0f};
+  VkRect2D scissor = {{0, 0}, {post.effects_width, post.effects_height}};
   vkCmdSetViewport(command_buffer->handle, 0, 1, &viewport);
   vkCmdSetScissor(command_buffer->handle, 0, 1, &scissor);
 
@@ -1328,6 +1306,9 @@ static void render_effects(VkContext *ctx, VkRendererCommandBuffer *command_buff
   vkCmdBindDescriptorSets(command_buffer->handle, VK_PIPELINE_BIND_POINT_GRAPHICS,
                           post.effects_shader.pipeline.layout, 0, 1,
                           &post.effects_set, 0, 0);
+  vkCmdPushConstants(command_buffer->handle, post.effects_shader.pipeline.layout,
+                     VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                     0, sizeof(params), &params);
   vkCmdDraw(command_buffer->handle, 3, 1, 0, 0);
   vkCmdEndRenderPass(command_buffer->handle);
   command_buffer->state = VKRENDERER_STATE_RECORDING;
@@ -1418,8 +1399,12 @@ void vkrenderer_post_process(VkContext *ctx, VkRendererCommandBuffer *command_bu
   push.effects = vec4_create(settings.ao_enabled ? 1.0f : 0.0f,
                              settings.gi_enabled ? 1.0f : 0.0f,
                              settings.gi_intensity, settings.ao_intensity);
-  push.bloom = vec4_create(settings.bloom_enabled ? 1.0f : 0.0f,
-                           settings.bloom_intensity, settings.bloom_threshold,
+  // The chain sums one blur per mip; normalise so the intensity setting keeps
+  // its meaning whatever the quality level.
+  u32 active_bloom_mips = bloom_mips(&settings);
+  f32 bloom_scale = active_bloom_mips > 0 ? 4.0f / (f32)active_bloom_mips : 0.0f;
+  push.bloom = vec4_create(settings.bloom_enabled && active_bloom_mips > 0 ? 1.0f : 0.0f,
+                           settings.bloom_intensity * bloom_scale, settings.bloom_threshold,
                            settings.bloom_radius);
   push.exposure_mode = vec4_create(settings.auto_exposure_enabled ? 1.0f : 0.0f,
                                    exp2f(settings.exposure_compensation), 0.0f, 0.0f);
@@ -1439,6 +1424,7 @@ void vkrenderer_post_destroy(VkContext *ctx)
   vkrenderer_shader_destroy(ctx, &post.shader);
   vkrenderer_shader_destroy(ctx, &post.effects_shader);
   vkrenderer_shader_destroy(ctx, &post.bloom_shader);
+  vkrenderer_shader_destroy(ctx, &post.bloom_up_shader);
   vkrenderer_destroy_image(ctx, &post.scene_color);
   vkrenderer_destroy_image(ctx, &post.scene_normal);
   vkrenderer_destroy_image(ctx, &post.scene_depth);
@@ -1464,6 +1450,11 @@ void vkrenderer_post_destroy(VkContext *ctx)
   {
     vkDestroyRenderPass(ctx->device.handle, post.bloom_renderpass, ctx->allocator);
     post.bloom_renderpass = 0;
+  }
+  if (post.bloom_up_renderpass)
+  {
+    vkDestroyRenderPass(ctx->device.handle, post.bloom_up_renderpass, ctx->allocator);
+    post.bloom_up_renderpass = 0;
   }
 
   if (post.exposure_pipeline)
@@ -1495,12 +1486,6 @@ void vkrenderer_post_destroy(VkContext *ctx)
 
   vkrenderer_lut_destroy_all(ctx);
 
-  if (post.effects_mapped)
-  {
-    vkUnmapMemory(ctx->device.handle, post.effects_memory);
-    post.effects_mapped = 0;
-  }
-  vkrenderer_buffer_destroy(ctx, &post.effects_buffer, &post.effects_memory);
   if (post.effects_pool)
   {
     vkDestroyDescriptorPool(ctx->device.handle, post.effects_pool, ctx->allocator);

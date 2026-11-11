@@ -80,13 +80,19 @@ b8 vkrenderer_shader_create(VkContext *ctx, const VkRendererShaderParams *params
   viewport_state.scissorCount = 1;
 
   VkPipelineRasterizationStateCreateInfo rasterizer = {VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-  rasterizer.depthClampEnable = VK_FALSE;
+  rasterizer.depthClampEnable =
+      (params->depth_clamp && ctx->device.features.depthClamp) ? VK_TRUE : VK_FALSE;
   rasterizer.rasterizerDiscardEnable = VK_FALSE;
   rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
   rasterizer.lineWidth = 1.0f;
   rasterizer.cullMode = params->cull_mode;
   rasterizer.frontFace = params->front_face;
-  rasterizer.depthBiasEnable = VK_FALSE;
+  if (params->depth_bias_constant != 0.0f || params->depth_bias_slope != 0.0f)
+  {
+    rasterizer.depthBiasEnable = VK_TRUE;
+    rasterizer.depthBiasConstantFactor = params->depth_bias_constant;
+    rasterizer.depthBiasSlopeFactor = params->depth_bias_slope;
+  }
 
   VkPipelineMultisampleStateCreateInfo multisampling = {VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
   multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -111,6 +117,13 @@ b8 vkrenderer_shader_create(VkContext *ctx, const VkRendererShaderParams *params
     color_attachments[i].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     color_attachments[i].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     color_attachments[i].alphaBlendOp = VK_BLEND_OP_ADD;
+    if (params->additive)
+    {
+      color_attachments[i].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+      color_attachments[i].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+      color_attachments[i].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+      color_attachments[i].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    }
     color_attachments[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
                                           VK_COLOR_COMPONENT_G_BIT |
                                           VK_COLOR_COMPONENT_B_BIT |

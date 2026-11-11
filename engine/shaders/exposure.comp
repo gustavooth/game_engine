@@ -55,30 +55,46 @@ void main()
   if (total_samples == 0u)
     return;
 
-  float low = float(total_samples) * 0.05;
-  float high = float(total_samples) * 0.95;
+  // Meter on the 15%..92% range of the histogram: the darkest pixels and the
+  // brightest ones (sun, emissives, highlights) do not drive the exposure.
+  float low = float(total_samples) * 0.15;
+  float high = float(total_samples) * 0.92;
   float cumulative = 0.0;
   float weighted_log = 0.0;
-  uint count = 0u;
+  float count = 0.0;
   for (int i = 0; i < 256; i++)
   {
-    float next = cumulative + float(histogram[i]);
-    if (next > low && cumulative < high)
+    float bin_count = float(histogram[i]);
+    float next = cumulative + bin_count;
+    // Portion of this bin that falls inside the metered range.
+    float inside = max(min(next, high) - max(cumulative, low), 0.0);
+    if (inside > 0.0)
     {
       float bin_log = -12.0 + (float(i) + 0.5) / 255.0 * 16.0;
-      weighted_log += bin_log * float(histogram[i]);
-      count += histogram[i];
+      weighted_log += bin_log * inside;
+      count += inside;
     }
     cumulative = next;
   }
 
-  if (count == 0u)
+  if (count <= 0.0)
     return;
 
-  float average_log = weighted_log / float(count);
-  float target = exp2(clamp(log2(0.18) - average_log, pc.params.z, pc.params.w));
-  float speed = 1.0 - exp(-max(pc.params.y, 0.0) * max(pc.params.x, 0.0));
-  exposure_data.exposure = mix(exposure_data.exposure, target, clamp(speed, 0.0, 1.0));
-  exposure_data.average_luminance = exp2(average_log);
+  float average_log = weighted_log / count;
+  float average_luminance = exp2(average_log);
+
+  // Expose the metered range slightly above middle grey: outdoor scenes
+  // read as sunlit instead of overcast.
+  float key = 0.20;
+
+  float target = exp2(clamp(log2(key) - average_log, pc.params.z, pc.params.w));
+  // The eye adapts to bright light faster than to darkness.
+  float rate = target < exposure_data.exposure ? pc.params.y * 1.6 : pc.params.y;
+  float speed = 1.0 - exp(-max(rate, 0.0) * max(pc.params.x, 0.0));
+  float current = exposure_data.exposure;
+  if (!(current > 0.0) || isinf(current))
+    current = target;
+  exposure_data.exposure = mix(current, target, clamp(speed, 0.0, 1.0));
+  exposure_data.average_luminance = average_luminance;
   exposure_data.target_exposure = target;
 }

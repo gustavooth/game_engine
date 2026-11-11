@@ -19,11 +19,18 @@ layout(push_constant) uniform PushConstants
 
 void main()
 {
-  mat4 skin =
-      bone_buffer.bones[pc.bone_offset + in_joints.x] * in_weights.x +
-      bone_buffer.bones[pc.bone_offset + in_joints.y] * in_weights.y +
-      bone_buffer.bones[pc.bone_offset + in_joints.z] * in_weights.z +
-      bone_buffer.bones[pc.bone_offset + in_joints.w] * in_weights.w;
+  vec4 local_position = vec4(in_position, 1.0);
 
-  gl_Position = pc.mvp * skin * vec4(in_position, 1.0);
+  // Static meshes (bone_offset 0) skip the four bone matrix fetches.
+  if (pc.bone_offset != 0u)
+  {
+    mat4 skin =
+        bone_buffer.bones[pc.bone_offset + in_joints.x] * in_weights.x +
+        bone_buffer.bones[pc.bone_offset + in_joints.y] * in_weights.y +
+        bone_buffer.bones[pc.bone_offset + in_joints.z] * in_weights.z +
+        bone_buffer.bones[pc.bone_offset + in_joints.w] * in_weights.w;
+    local_position = skin * local_position;
+  }
+
+  gl_Position = pc.mvp * local_position;
 }

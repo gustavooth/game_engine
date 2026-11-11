@@ -53,8 +53,13 @@ b8 vkrenderer_device_create(VkContext *ctx)
     priorities[i] = priorities2;
   }
 
+  VkPhysicalDeviceFeatures supported_features;
+  vkGetPhysicalDeviceFeatures(ctx->device.physical, &supported_features);
+
   VkPhysicalDeviceFeatures device_features = {0};
   device_features.samplerAnisotropy = VK_TRUE;
+  // Optional: lets shadow casters behind the light volume still cast.
+  device_features.depthClamp = supported_features.depthClamp;
 
   const char *swapchain_ext = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 

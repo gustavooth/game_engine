@@ -496,7 +496,7 @@ EGNAPI u32 renderer_mesh_load_glb(const char *path)
     return 0;
 
   VkContext *ctx = vkrenderer_get_context();
-  if (!ctx)
+  if (!ctx || !ctx->device.handle)
     return 0;
 
   char resolved_path[2048];

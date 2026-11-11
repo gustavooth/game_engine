@@ -41,6 +41,18 @@ b8 vkrenderer_submesh_create(VkContext *ctx,
   if (!ctx || !vertices || vertex_count == 0 || !out_submesh)
     return false;
 
+  // An index past the vertex buffer makes the GPU read unrelated memory and
+  // crashes the physics mesh collider, so reject malformed meshes up front
+  // (this is the single entry point for OBJ, glTF and game-created meshes).
+  for (u32 i = 0; indices && i < index_count; i++)
+  {
+    if (indices[i] >= vertex_count)
+    {
+      EGNERROR("VKRENDERER mesh index %u is out of range (%u vertices)", indices[i], vertex_count);
+      return false;
+    }
+  }
+
   MEMOZERO(out_submesh, sizeof(VkRendererSubMesh));
   if (material)
     out_submesh->material = *material;
@@ -50,6 +62,21 @@ b8 vkrenderer_submesh_create(VkContext *ctx,
     out_submesh->material.metallic_factor = 0.0f;
     out_submesh->material.roughness_factor = 1.0f;
   }
+
+  vec3 bounds_min = vertices[0].position;
+  vec3 bounds_max = vertices[0].position;
+  for (u32 i = 1; i < vertex_count; i++)
+  {
+    vec3 p = vertices[i].position;
+    bounds_min.x = EGNMIN(bounds_min.x, p.x);
+    bounds_min.y = EGNMIN(bounds_min.y, p.y);
+    bounds_min.z = EGNMIN(bounds_min.z, p.z);
+    bounds_max.x = EGNMAX(bounds_max.x, p.x);
+    bounds_max.y = EGNMAX(bounds_max.y, p.y);
+    bounds_max.z = EGNMAX(bounds_max.z, p.z);
+  }
+  out_submesh->bounds_min = bounds_min;
+  out_submesh->bounds_max = bounds_max;
 
   u64 vertex_size = sizeof(MeshVertex) * (u64)vertex_count;
   if (!vkrenderer_buffer_create_device_local(ctx, vertices, vertex_size,
@@ -101,6 +128,21 @@ u32 vkrenderer_mesh_register(VkContext *ctx, VkRendererSubMesh *submeshes,
     mesh->submesh_count = submesh_count;
     mesh->asset = asset;
     mesh->used = true;
+
+    vec3 bounds_min = submeshes[0].bounds_min;
+    vec3 bounds_max = submeshes[0].bounds_max;
+    for (u32 s = 1; s < submesh_count; s++)
+    {
+      bounds_min.x = EGNMIN(bounds_min.x, submeshes[s].bounds_min.x);
+      bounds_min.y = EGNMIN(bounds_min.y, submeshes[s].bounds_min.y);
+      bounds_min.z = EGNMIN(bounds_min.z, submeshes[s].bounds_min.z);
+      bounds_max.x = EGNMAX(bounds_max.x, submeshes[s].bounds_max.x);
+      bounds_max.y = EGNMAX(bounds_max.y, submeshes[s].bounds_max.y);
+      bounds_max.z = EGNMAX(bounds_max.z, submeshes[s].bounds_max.z);
+    }
+    mesh->bounds_center = vec3_mul_scalar(vec3_add(bounds_min, bounds_max), 0.5f);
+    mesh->bounds_radius = vec3_length(vec3_sub(bounds_max, bounds_min)) * 0.5f;
+    mesh->cullable = !(asset && asset->skinned) && mesh->bounds_radius > 0.0f;
     return i + 1;
   }
 
@@ -287,7 +329,7 @@ EGNAPI u32 renderer_mesh_create_static(const f32 *positions, const f32 *normals,
                                       const u32 *indices, u32 index_count)
 {
   VkContext *ctx = vkrenderer_get_context();
-  if (!ctx || !positions || !normals || !uvs || vertex_count == 0 ||
+  if (!ctx || !ctx->device.handle || !positions || !normals || !uvs || vertex_count == 0 ||
       !indices || index_count < 3)
     return 0;
 

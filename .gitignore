@@ -1,8 +1,7 @@
+# Build artifacts
 output/
 build/
-third_part/v/
-third_part/JoltC/
-third_part/JoltPhysics/
-third_part/cmake/
-third_part/emsdk/
-third_part/naga/
+
+# Third-party dependencies. They are downloaded and built on demand.
+# See the "Montando a pasta third_part" section of the README.
+third_part/

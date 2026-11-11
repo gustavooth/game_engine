@@ -40,6 +40,7 @@ pub mut:
 	window_pos_y  int
 	vsync         bool
 	target_fps    int
+	headless      bool
 }
 
 fn C.engine_create_instance(settings &C.EngineSettings, out_instance_ptr &voidptr) bool
@@ -49,6 +50,7 @@ fn C.engine_request_quit(instance_ptr voidptr)
 fn C.engine_get_delta_time(instance_ptr voidptr) f64
 fn C.engine_get_elapsed_time(instance_ptr voidptr) f64
 fn C.engine_get_window_size(instance_ptr voidptr, out_width &int, out_height &int) bool
+fn C.engine_is_headless(instance_ptr voidptr) bool
 fn C.engine_destroy_instance(instance_ptr voidptr)
 fn C.engine_set_vsync(instance_ptr voidptr, vsync bool)
 fn C.engine_get_vsync(instance_ptr voidptr) bool
@@ -309,6 +311,8 @@ fn C.egn_model_set_pbr(model voidptr, metallic f32, roughness f32) bool
 fn C.egn_model_get_pbr(model voidptr, metallic &f32, roughness &f32)
 fn C.egn_model_set_water(model voidptr, water bool) bool
 fn C.egn_model_get_water(model voidptr) bool
+fn C.egn_model_set_surface(model voidptr, surface u32) bool
+fn C.egn_model_get_surface(model voidptr) u32
 fn C.egn_model_set_mesh(model voidptr, mesh u32)
 fn C.egn_model_get_texture(model voidptr) u32
 fn C.egn_model_set_texture(model voidptr, texture u32)

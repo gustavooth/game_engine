@@ -30,5 +30,8 @@ void vkrenderer_scene_render(VkContext *ctx, VkRendererCommandBuffer *command_bu
 b8 vkrenderer_scene_primary_camera(VkContext *ctx, mat4 *out_view_projection,
                                    vec3 *out_position);
 
+/** Projection scale (1 / tan(fov / 2)) and aspect ratio of the primary camera. */
+b8 vkrenderer_scene_primary_projection(f32 *out_scale_y, f32 *out_aspect);
+
 /** Frees renderer-side per-model animation state. */
 void vkrenderer_scene_shutdown(VkContext *ctx);

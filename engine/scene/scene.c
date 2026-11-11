@@ -133,7 +133,11 @@ EgnObject *egn_object_from_handle(void *handle)
 
 void egn_object_mark_world_dirty(EgnObject *object)
 {
-  if (!object)
+  // A dirty object always has a dirty subtree: a child is only cleaned by
+  // computing its parents first, and new children start dirty. So the walk
+  // can stop here instead of revisiting the whole subtree on every setter
+  // call (objects driven by physics or scripts move every frame).
+  if (!object || object->world_dirty)
     return;
 
   object->world_dirty = true;

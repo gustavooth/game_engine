@@ -56,10 +56,16 @@ void inputs_update(f64 delta_time)
 
   state_ptr->current_mouse.delta_x = 0.0f;
   state_ptr->current_mouse.delta_y = 0.0f;
+  // The wheel is a per-frame delta, like the pointer motion. It used to keep
+  // its last value forever, so the game saw a permanent scroll.
+  state_ptr->current_mouse.wheel = 0;
 }
 
 void inputs_process_key(keys key, b8 pressed)
 {
+  if (!state_ptr || (u32)key >= 256)
+    return;
+  pressed = pressed ? true : false;
   // The check prevents the event from being triggered multiple times in the same frame.
   if (state_ptr->current_keyboard.keys[key] != pressed)
   {
@@ -75,6 +81,9 @@ void inputs_process_key(keys key, b8 pressed)
 
 void inputs_process_button(Buttons button, b8 pressed)
 {
+  if (!state_ptr || (u32)button >= BUTTON_MAX_BUTTONS)
+    return;
+  pressed = pressed ? true : false;
   // The check prevents the event from being triggered multiple times in the same frame.
   if (state_ptr->current_mouse.buttons[button] != pressed)
   {
@@ -113,56 +122,88 @@ void inputs_process_mouse_delta(f32 dx, f32 dy)
 
 void inputs_process_mouse_wheel(i8 z_delta)
 {
-  // The check prevents the event from being triggered multiple times in the same frame.
-  if (state_ptr->current_mouse.wheel != z_delta)
-  {
-    // Update internal state_ptr->
-    state_ptr->current_mouse.wheel = z_delta;
+  if (!state_ptr || z_delta == 0)
+    return;
 
-    // Fire the event.
-    EventContext context;
-    context.data.u8[0] = z_delta;
-    events_fire(EVENT_CODE_MOUSE_WHEEL, 0, context);
+  // Accumulate within the frame and always fire: two notches in the same
+  // direction are two events, not one.
+  i32 total = (i32)state_ptr->current_mouse.wheel + z_delta;
+  state_ptr->current_mouse.wheel = (i8)EGNCLAMP(total, -127, 127);
+
+  EventContext context;
+  context.data.u8[0] = (u8)z_delta;
+  events_fire(EVENT_CODE_MOUSE_WHEEL, 0, context);
+}
+
+void inputs_release_all(void)
+{
+  if (!state_ptr)
+    return;
+  for (u32 key = 0; key < 256; key++)
+  {
+    if (state_ptr->current_keyboard.keys[key])
+      inputs_process_key((keys)key, false);
+  }
+  for (u32 button = 0; button < BUTTON_MAX_BUTTONS; button++)
+  {
+    if (state_ptr->current_mouse.buttons[button])
+      inputs_process_button((Buttons)button, false);
   }
 }
 
 b8 inputs_key_down(keys key)
 {
+  if (!state_ptr || (u32)key >= 256)
+    return false;
   return state_ptr->current_keyboard.keys[key] == true;
 }
 
 b8 inputs_key_up(keys key)
 {
+  if (!state_ptr || (u32)key >= 256)
+    return true;
   return state_ptr->current_keyboard.keys[key] == false;
 }
 
 b8 inputs_was_key_down(keys key)
 {
+  if (!state_ptr || (u32)key >= 256)
+    return false;
   return state_ptr->previous_keyboard.keys[key] == true;
 }
 
 b8 inputs_was_key_up(keys key)
 {
+  if (!state_ptr || (u32)key >= 256)
+    return true;
   return state_ptr->previous_keyboard.keys[key] == false;
 }
 
 b8 inputs_btn_down(Buttons button)
 {
+  if (!state_ptr || (u32)button >= BUTTON_MAX_BUTTONS)
+    return false;
   return state_ptr->current_mouse.buttons[button] == true;
 }
 
 b8 inputs_btn_up(Buttons button)
 {
+  if (!state_ptr || (u32)button >= BUTTON_MAX_BUTTONS)
+    return true;
   return state_ptr->current_mouse.buttons[button] == false;
 }
 
 b8 inputs_was_btn_down(Buttons button)
 {
+  if (!state_ptr || (u32)button >= BUTTON_MAX_BUTTONS)
+    return false;
   return state_ptr->previous_mouse.buttons[button] == true;
 }
 
 b8 inputs_was_btn_up(Buttons button)
 {
+  if (!state_ptr || (u32)button >= BUTTON_MAX_BUTTONS)
+    return true;
   return state_ptr->previous_mouse.buttons[button] == false;
 }
 

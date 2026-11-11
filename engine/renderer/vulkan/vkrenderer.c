@@ -27,6 +27,7 @@
 #include "platform/window.h"
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 static VkContext ctx;
@@ -216,6 +217,11 @@ static b8 create_render_pipelines(void)
   params_shadow.depth_test = true;
   params_shadow.depth_write = true;
   params_shadow.blending = false;
+  // Slope-scaled bias in the rasterizer removes acne without the large
+  // constant bias in the shader that detached shadows from their casters.
+  params_shadow.depth_bias_constant = 1.5f;
+  params_shadow.depth_bias_slope = 2.0f;
+  params_shadow.depth_clamp = true;
   params_shadow.cull_mode = VK_CULL_MODE_NONE;
   params_shadow.front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
   params_shadow.render_pass = vkrenderer_lighting_shadow_renderpass(&ctx);
@@ -277,7 +283,7 @@ b8 renderer_initialize(Window *win, u32 width, u32 height, b8 vsync)
 
   if (ctx.device.properties.limits.maxPushConstantsSize < 192)
   {
-    EGNERROR("VKRENDERER device does not support 148 bytes of push constants");
+    EGNERROR("VKRENDERER device does not support 192 bytes of push constants");
     return false;
   }
 
@@ -396,10 +402,11 @@ b8 renderer_draw_frame(RenderPacket packet)
   if (!begin_frame())
     return false;
 
-  VkRendererCommandBuffer *command_buffer = &ctx.graphics_command_buffers[ctx.image_index];
+  VkRendererCommandBuffer *command_buffer = &ctx.graphics_command_buffers[ctx.current_frame];
 
   if (vkrenderer_scene_prepare(&ctx, command_buffer, packet.delta_time))
     vkrenderer_scene_render_shadows(&ctx, command_buffer);
+  vkrenderer_sky_update(&ctx, command_buffer);
 
   vkrenderer_post_begin_scene(&ctx, command_buffer);
   vkrenderer_scene_render(&ctx, command_buffer);
@@ -456,10 +463,23 @@ b8 create_instance()
   VkInstanceCreateInfo instance_info = {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
   instance_info.pApplicationInfo = &app_info;
 
+  // The validation layer intercepts every Vulkan call and costs a large part
+  // of the CPU frame time, so it is opt-in: run with EGN_VK_VALIDATION=1.
   const char *validation_layer = "VK_LAYER_KHRONOS_validation";
-  validation_layer_enabled = instance_layer_available(validation_layer);
-  if (!validation_layer_enabled)
-    EGNWARN("VKRENDERER validation layer not available, running without validation");
+  const char *validation_request = getenv("EGN_VK_VALIDATION");
+  validation_layer_enabled = false;
+  if (validation_request && validation_request[0] != '\0' && validation_request[0] != '0')
+  {
+    validation_layer_enabled = instance_layer_available(validation_layer);
+    if (!validation_layer_enabled)
+    {
+      EGNWARN("VKRENDERER validation layer requested but not available");
+    }
+    else
+    {
+      EGNINFO("VKRENDERER validation layer enabled");
+    }
+  }
 
   const char *instance_extensions[3];
   u32 instance_ext_count = 0;
@@ -496,13 +516,14 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
   switch (messageSeverity)
   {
   case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
-    EGNERROR(pCallbackData->pMessage);
+    // Never use the driver text as the format string: it can contain '%'.
+    EGNERROR("%s", pCallbackData->pMessage);
     break;
   case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
-    EGNWARN(pCallbackData->pMessage);
+    EGNWARN("%s", pCallbackData->pMessage);
     break;
   case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
-    EGNINFO(pCallbackData->pMessage);
+    EGNINFO("%s", pCallbackData->pMessage);
     break;
   default:
     break;
@@ -682,7 +703,7 @@ b8 begin_frame()
                                                      ctx.image_available_semaphores[ctx.current_frame], 0, &ctx.image_index))
     return false;
 
-  VkRendererCommandBuffer *command_buffer = &ctx.graphics_command_buffers[ctx.image_index];
+  VkRendererCommandBuffer *command_buffer = &ctx.graphics_command_buffers[ctx.current_frame];
   vkrenderer_command_buffer_reset(command_buffer);
   vkrenderer_command_buffer_begin(command_buffer, false, false, false);
 
@@ -707,7 +728,7 @@ b8 begin_frame()
 
 b8 end_frame()
 {
-  VkRendererCommandBuffer *command_buffer = &ctx.graphics_command_buffers[ctx.image_index];
+  VkRendererCommandBuffer *command_buffer = &ctx.graphics_command_buffers[ctx.current_frame];
 
   vkrenderer_renderpass_end(command_buffer, &ctx.main_renderpass);
 

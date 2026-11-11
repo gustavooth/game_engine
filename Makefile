@@ -87,6 +87,16 @@ ENGINE_DIR := engine
 GAME_DIR := game
 THIRD_PARTY_DIR := third_part
 
+# Single-header dependencies. They are not versioned; `make headers` downloads
+# them and `make deps` also builds Jolt + V.
+CURL ?= curl
+THIRD_PARTY_HEADERS := \
+	$(THIRD_PARTY_DIR)/cgltf.h \
+	$(THIRD_PARTY_DIR)/fast_obj.h \
+	$(THIRD_PARTY_DIR)/stb_image.h \
+	$(THIRD_PARTY_DIR)/stb_image_write.h \
+	$(THIRD_PARTY_DIR)/stb_truetype.h
+
 JOLTC_DIR := $(THIRD_PARTY_DIR)/JoltC
 JOLT_DIR := $(THIRD_PARTY_DIR)/JoltPhysics
 JOLT_LIBS := $(JOLTC_DIR)/build/lib/libjoltc.a $(JOLTC_DIR)/build/lib/libJolt.a
@@ -129,7 +139,11 @@ GAME_BIN := $(OUTPUT_LINUX)/$(GAME_EXE_NAME)
 # Compiler flags
 # -----------------------------------------------------------------------------
 
-C_FLAGS := -g -MD -Wall -Werror -Wvarargs -Wno-missing-braces -Werror=vla
+# Optimised by default (the engine used to be built without any -O flag, which
+# left the math, animation and scene traversal code unoptimised). Use
+# `make OPT=-O0` for a debug build.
+OPT ?= -O2
+C_FLAGS := -g $(OPT) -fno-math-errno -MD -Wall -Werror -Wvarargs -Wno-missing-braces -Werror=vla
 DEFINES := -DEGNEXPORT
 INC_FLAGS := -I$(ENGINE_DIR) -I$(THIRD_PARTY_DIR) $(JOLT_INC) $(PLATFORM_INC)
 
@@ -205,7 +219,7 @@ V_PATH := $(abspath $(GAME_DIR)/..)|@vlib|@vmodules
 # Targets
 # -----------------------------------------------------------------------------
 
-.PHONY: all build engine game run clean v jolt emsdk jolt-web web run-web clean-web naga help test
+.PHONY: all build engine game run clean v jolt deps headers emsdk jolt-web web run-web clean-web naga help test
 
 all: engine game
 
@@ -215,10 +229,45 @@ engine: $(ENGINE_LIB) $(SPIRV)
 
 game: $(GAME_BIN)
 
+headers: $(THIRD_PARTY_HEADERS)
+
+$(THIRD_PARTY_DIR)/cgltf.h:
+	@echo "  DEPS $@"
+	@command -v $(CURL) >/dev/null 2>&1 || { echo "error: curl not found"; exit 1; }
+	@$(MKDIR) $(THIRD_PARTY_DIR)
+	@$(CURL) -fsSL https://raw.githubusercontent.com/jkuhlmann/cgltf/master/cgltf.h -o $@
+
+$(THIRD_PARTY_DIR)/fast_obj.h:
+	@echo "  DEPS $@"
+	@command -v $(CURL) >/dev/null 2>&1 || { echo "error: curl not found"; exit 1; }
+	@$(MKDIR) $(THIRD_PARTY_DIR)
+	@$(CURL) -fsSL https://raw.githubusercontent.com/thisistherk/fast_obj/master/fast_obj.h -o $@
+
+$(THIRD_PARTY_DIR)/stb_image.h:
+	@echo "  DEPS $@"
+	@command -v $(CURL) >/dev/null 2>&1 || { echo "error: curl not found"; exit 1; }
+	@$(MKDIR) $(THIRD_PARTY_DIR)
+	@$(CURL) -fsSL https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -o $@
+
+$(THIRD_PARTY_DIR)/stb_image_write.h:
+	@echo "  DEPS $@"
+	@command -v $(CURL) >/dev/null 2>&1 || { echo "error: curl not found"; exit 1; }
+	@$(MKDIR) $(THIRD_PARTY_DIR)
+	@$(CURL) -fsSL https://raw.githubusercontent.com/nothings/stb/master/stb_image_write.h -o $@
+
+$(THIRD_PARTY_DIR)/stb_truetype.h:
+	@echo "  DEPS $@"
+	@command -v $(CURL) >/dev/null 2>&1 || { echo "error: curl not found"; exit 1; }
+	@$(MKDIR) $(THIRD_PARTY_DIR)
+	@$(CURL) -fsSL https://raw.githubusercontent.com/nothings/stb/master/stb_truetype.h -o $@
+
+deps: headers $(JOLT_STAMP)
+	@$(MAKE) v
+
 TEST_FONT ?= /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
 test: engine
 	@$(MKDIR) $(BUILD_DIR)/tests
-	@for source in tests/egnstring_test.c tests/physics_query_test.c tests/character_controller_test.c tests/material_test.c tests/graphics_settings_test.c tests/font_test.c tests/noise_test.c; do \
+	@for source in tests/egnstring_test.c tests/physics_query_test.c tests/character_controller_test.c tests/material_test.c tests/graphics_settings_test.c tests/font_test.c tests/noise_test.c tests/network_test.c tests/headless_test.c; do \
 		name=$$(basename $$source .c); \
 		$(CC) -g -I$(ENGINE_DIR) $$source -L$(OUTPUT_LINUX) -Wl,-rpath,$(abspath $(OUTPUT_LINUX)) -lengine -o $(BUILD_DIR)/tests/$$name || exit $$?; \
 	done
@@ -228,6 +277,8 @@ test: engine
 	@$(BUILD_DIR)/tests/material_test
 	@$(BUILD_DIR)/tests/graphics_settings_test
 	@$(BUILD_DIR)/tests/noise_test
+	@$(BUILD_DIR)/tests/network_test
+	@$(BUILD_DIR)/tests/headless_test
 	@if command -v node >/dev/null 2>&1; then node tests/glb_animation_test.mjs; else echo "Skipping Web GLB test: Node.js not installed"; fi
 	@if [ -f "$(TEST_FONT)" ]; then $(BUILD_DIR)/tests/font_test "$(TEST_FONT)"; else echo "Skipping font test: set TEST_FONT to a TTF/OTF file"; fi
 
@@ -431,6 +482,8 @@ help:
 	@echo "  make build        alias for 'make all'"
 	@echo "  make run          build everything and run the game"
 	@echo "  make clean        remove build/ and output/"
+	@echo "  make deps         download headers and build Jolt + V"
+	@echo "  make headers      download the single-header dependencies"
 	@echo "  make v            clone/build V in third_part/v"
 	@echo "  make jolt         clone/build JoltC + Jolt in third_part/"
 	@echo "  make emsdk        clone/install Emscripten in third_part/"

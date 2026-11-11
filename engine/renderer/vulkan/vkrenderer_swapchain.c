@@ -131,12 +131,14 @@ b8 create(VkContext *ctx, u32 width, u32 height, VkRendererSwapchain *out_swapch
   if (support.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)
     swapchain_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
+  // Declared outside the branch: the create info keeps a pointer to it until
+  // vkCreateSwapchainKHR() runs.
+  u32 queueFamilyIndices[] = {
+      ctx->device.queue_indexes.graphics_family_index,
+      ctx->device.queue_indexes.present_family_index,
+  };
   if (ctx->device.queue_indexes.graphics_family_index != ctx->device.queue_indexes.present_family_index)
   {
-    u32 queueFamilyIndices[] = {
-        ctx->device.queue_indexes.graphics_family_index,
-        ctx->device.queue_indexes.present_family_index,
-    };
     swapchain_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT,
     swapchain_info.queueFamilyIndexCount = 2,
     swapchain_info.pQueueFamilyIndices = queueFamilyIndices;

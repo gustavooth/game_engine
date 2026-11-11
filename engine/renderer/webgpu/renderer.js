@@ -14,8 +14,116 @@ const LIGHT_DIRECTIONAL = 0;
 const LIGHT_POINT = 1;
 const SHADOW_CASCADES = 4;
 // Must match Globals in scene.wgsl/sky.wgsl: 108 floats before the point-light
-// array, 8 lights * 2 vec4 = 64 floats, then inverse VP/atmosphere/fog/time.
-const GLOBALS_FLOATS = 208;
+// array, 8 lights * 2 vec4 = 64 floats, then inverse VP/atmosphere/fog/time and
+// the shadow/sky vectors (cascade texel, shadow fade, zenith, horizon, ground,
+// sun disc).
+const GLOBALS_FLOATS = 232;
+const SKY_LUT_WIDTH = 256;
+const SKY_LUT_HEIGHT = 128;
+const BLOOM_MAX_MIPS = 7;
+
+// ---------------------------------------------------------------------------
+// CPU evaluation of the atmosphere rendered by sky_lut.wgsl. A few samples per
+// frame give lighting that matches the visible sky: the colour of the sun
+// after crossing the atmosphere, the sky/ground ambient and the fog colour.
+// Keep in sync with engine/renderer/atmosphere.c.
+// ---------------------------------------------------------------------------
+const ATMOSPHERE_PLANET_RADIUS = 6371;
+const ATMOSPHERE_RADIUS = 6471;
+const ATMOSPHERE_RAYLEIGH_HEIGHT = 8;
+const ATMOSPHERE_MIE_HEIGHT = 1.2;
+const BETA_RAYLEIGH = [0.0058, 0.0135, 0.0331];
+
+function raySphere(origin, direction, radius) {
+  const b = origin[0] * direction[0] + origin[1] * direction[1] + origin[2] * direction[2];
+  const c = origin[0] * origin[0] + origin[1] * origin[1] + origin[2] * origin[2] - radius * radius;
+  const discriminant = b * b - c;
+  if (discriminant < 0) return null;
+  const root = Math.sqrt(discriminant);
+  return [-b - root, -b + root];
+}
+
+// Optical depth [Rayleigh, Mie] toward the sun, or null when the planet blocks it.
+function lightOpticalDepth(position, sun, steps) {
+  const hit = raySphere(position, sun, ATMOSPHERE_RADIUS);
+  if (!hit || hit[1] <= 0) return [0, 0];
+  const planet = raySphere(position, sun, ATMOSPHERE_PLANET_RADIUS - 1);
+  if (planet && planet[0] > 0) return null;
+  let rayleigh = 0, mie = 0, previous = 0;
+  for (let i = 0; i < steps; i++) {
+    const u = (i + 1) / steps;
+    const next = hit[1] * u * u;
+    const mid = 0.5 * (previous + next);
+    const height = Math.max(0, Math.hypot(position[0] + sun[0] * mid,
+      position[1] + sun[1] * mid, position[2] + sun[2] * mid) - ATMOSPHERE_PLANET_RADIUS);
+    rayleigh += Math.exp(-height / ATMOSPHERE_RAYLEIGH_HEIGHT) * (next - previous);
+    mie += Math.exp(-height / ATMOSPHERE_MIE_HEIGHT) * (next - previous);
+    previous = next;
+  }
+  return [rayleigh, mie];
+}
+
+function atmosphereOrigin(params) {
+  return [0, ATMOSPHERE_PLANET_RADIUS + 0.002 + Math.max(0, params.altitudeKm), 0];
+}
+
+function atmosphereMie(params) {
+  return 0.021 * params.mie * (params.turbidity > 0 ? params.turbidity : 1);
+}
+
+function atmosphereSunTransmittance(params, steps) {
+  const depth = lightOpticalDepth(atmosphereOrigin(params), params.sunDirection, steps);
+  if (!depth) return [0, 0, 0];
+  const betaMie = atmosphereMie(params);
+  return BETA_RAYLEIGH.map((beta) =>
+    Math.exp(-(beta * params.rayleigh * depth[0] + betaMie * 1.1 * depth[1])));
+}
+
+function atmosphereSkyRadiance(params, direction, steps, lightSteps) {
+  const origin = atmosphereOrigin(params);
+  const hit = raySphere(origin, direction, ATMOSPHERE_RADIUS);
+  if (!hit || hit[1] <= 0) return [0, 0, 0];
+  const tStart = Math.max(0, hit[0]);
+  let tEnd = hit[1];
+  const planet = raySphere(origin, direction, ATMOSPHERE_PLANET_RADIUS);
+  if (planet && planet[0] > 0 && planet[0] < tEnd) tEnd = planet[0];
+
+  const betaR = BETA_RAYLEIGH.map((beta) => beta * params.rayleigh);
+  const betaM = atmosphereMie(params);
+  const sun = params.sunDirection;
+  const mu = direction[0] * sun[0] + direction[1] * sun[1] + direction[2] * sun[2];
+  const phaseR = 3 / (16 * Math.PI) * (1 + mu * mu);
+  const g = params.mieAnisotropy;
+  const phaseM = 3 / (8 * Math.PI) * ((1 - g * g) * (1 + mu * mu)) /
+    ((2 + g * g) * Math.pow(Math.max(1 + g * g - 2 * g * mu, 0.001), 1.5));
+
+  const sumR = [0, 0, 0], sumM = [0, 0, 0];
+  let opticalR = 0, opticalM = 0, previous = tStart;
+  const span = tEnd - tStart;
+  for (let i = 0; i < steps; i++) {
+    const u = (i + 1) / steps;
+    const next = tStart + span * u * u;
+    const mid = 0.5 * (previous + next);
+    const length = next - previous;
+    previous = next;
+    const position = [origin[0] + direction[0] * mid, origin[1] + direction[1] * mid,
+      origin[2] + direction[2] * mid];
+    const height = Math.max(0, Math.hypot(position[0], position[1], position[2]) - ATMOSPHERE_PLANET_RADIUS);
+    const densityR = Math.exp(-height / ATMOSPHERE_RAYLEIGH_HEIGHT) * length;
+    const densityM = Math.exp(-height / ATMOSPHERE_MIE_HEIGHT) * length;
+    opticalR += densityR;
+    opticalM += densityM;
+    const light = lightOpticalDepth(position, sun, lightSteps);
+    if (!light) continue;
+    for (let c = 0; c < 3; c++) {
+      const transmittance = Math.exp(-(betaR[c] * (opticalR + light[0]) + betaM * 1.1 * (opticalM + light[1])));
+      sumR[c] += densityR * transmittance;
+      sumM[c] += densityM * transmittance;
+    }
+  }
+  return [0, 1, 2].map((c) => (sumR[c] * betaR[c] * phaseR + sumM[c] * betaM * phaseM) *
+    params.sunColor[c] * params.sunIntensity);
+}
 const OBJECT_FLOATS = 44;
 
 function shadowSizeForQuality(quality) {
@@ -135,15 +243,9 @@ class WebGPURenderer {
   effectsDepthSampler;
   effectsTexture;
   effectsView;
-  bloomTextureA;
-  bloomTextureB;
-  bloomViewA;
-  bloomViewB;
   bloomPipeline;
   bloomLayout;
   bloomSampler;
-  bloomBindGroups = [];
-  bloomUniformBuffers = [];
   exposureBuffer;
   exposurePipeline;
   exposureLayout;
@@ -214,6 +316,7 @@ class WebGPURenderer {
     this.effectsModule = device.createShaderModule({ code: shaders.effects, label: "egn-effects-shader" });
     this.bloomModule = device.createShaderModule({ code: shaders.bloom, label: "egn-bloom-shader" });
     this.exposureModule = device.createShaderModule({ code: shaders.exposure, label: "egn-exposure-shader" });
+    this.skyLutModule = device.createShaderModule({ code: shaders.skyLut, label: "egn-sky-lut-shader" });
     const hdrFormat = "rgba16float";
     const normalFormat = "rgba16float";
     this.frameLayout = device.createBindGroupLayout({
@@ -221,7 +324,10 @@ class WebGPURenderer {
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth", viewDimension: "2d-array" } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } }
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
+        // Sky-view LUT: the sky pass draws it and the PBR reflections sample it.
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } }
       ]
     });
     this.objectLayout = device.createBindGroupLayout({
@@ -305,7 +411,11 @@ class WebGPURenderer {
       depthStencil: {
         format: "depth32float",
         depthWriteEnabled: true,
-        depthCompare: "less"
+        depthCompare: "less",
+        // Slope-scaled bias in the rasterizer removes acne without the large
+        // constant bias in the shader that detached shadows from casters.
+        depthBias: 2,
+        depthBiasSlopeScale: 2.0
       }
     });
     this.particlePipeline = device.createRenderPipeline({
@@ -361,7 +471,10 @@ class WebGPURenderer {
         { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
-        { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "3d" } }
+        { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "3d" } },
+        // Scene normal/albedo and depth, for the depth-aware AO/GI upsample.
+        { binding: 7, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+        { binding: 8, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } }
       ]
     });
     this.postPipeline = device.createRenderPipeline({
@@ -411,21 +524,30 @@ class WebGPURenderer {
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } }
       ]
     });
     this.bloomSampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
-    this.bloomUniformBuffers = [0, 1].map((index) => device.createBuffer({
-      label: `egn-bloom-uniforms-${index}`,
-      size: 32,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-    }));
+    const bloomPipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.bloomLayout] });
+    // Mip-chain bloom: the downsample pipeline overwrites a mip, the upsample
+    // pipeline adds the blurred smaller mip onto the larger one.
     this.bloomPipeline = device.createRenderPipeline({
-      label: "egn-bloom-pipeline",
-      layout: device.createPipelineLayout({ bindGroupLayouts: [this.bloomLayout] }),
+      label: "egn-bloom-down-pipeline",
+      layout: bloomPipelineLayout,
       vertex: { module: this.bloomModule, entryPoint: "vs_main" },
       fragment: { module: this.bloomModule, entryPoint: "fs_main",
         targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list", cullMode: "none" }
+    });
+    this.bloomUpPipeline = device.createRenderPipeline({
+      label: "egn-bloom-up-pipeline",
+      layout: bloomPipelineLayout,
+      vertex: { module: this.bloomModule, entryPoint: "vs_main" },
+      fragment: { module: this.bloomModule, entryPoint: "fs_main",
+        targets: [{ format: "rgba16float",
+          blend: { color: { srcFactor: "one", dstFactor: "one" },
+                   alpha: { srcFactor: "one", dstFactor: "one" } } }] },
       primitive: { topology: "triangle-list", cullMode: "none" }
     });
     this.exposureLayout = device.createBindGroupLayout({
@@ -452,6 +574,43 @@ class WebGPURenderer {
       layout: device.createPipelineLayout({ bindGroupLayouts: [this.exposureLayout] }),
       compute: { module: this.exposureModule, entryPoint: "main" }
     });
+
+    // Sky-view LUT (see sky_lut.wgsl): re-rendered only when the sun or the
+    // atmosphere settings change.
+    this.skyLutTexture = device.createTexture({
+      label: "egn-sky-lut",
+      size: [SKY_LUT_WIDTH, SKY_LUT_HEIGHT],
+      format: "rgba16float",
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+    });
+    this.skyLutView = this.skyLutTexture.createView();
+    // Azimuth wraps around, elevation clamps at the horizon and the zenith.
+    this.skyLutSampler = device.createSampler({
+      magFilter: "linear", minFilter: "linear",
+      addressModeU: "repeat", addressModeV: "clamp-to-edge"
+    });
+    this.skyLutUniformBuffer = device.createBuffer({
+      label: "egn-sky-lut-uniforms",
+      size: 64,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+    const skyLutLayout = device.createBindGroupLayout({
+      label: "egn-sky-lut-layout",
+      entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }]
+    });
+    this.skyLutBindGroup = device.createBindGroup({
+      layout: skyLutLayout,
+      entries: [{ binding: 0, resource: { buffer: this.skyLutUniformBuffer } }]
+    });
+    this.skyLutPipeline = device.createRenderPipeline({
+      label: "egn-sky-lut-pipeline",
+      layout: device.createPipelineLayout({ bindGroupLayouts: [skyLutLayout] }),
+      vertex: { module: this.skyLutModule, entryPoint: "vs_main" },
+      fragment: { module: this.skyLutModule, entryPoint: "fs_main",
+        targets: [{ format: "rgba16float" }] },
+      primitive: { topology: "triangle-list", cullMode: "none" }
+    });
+    this.skyLutKey = "";
 
     this.createShadowResources();
     this.registerBuiltinMeshes();
@@ -823,9 +982,11 @@ class WebGPURenderer {
         { binding: 1, resource: this.postSampler },
         { binding: 2, resource: { buffer: this.postUniformBuffer } },
         { binding: 3, resource: this.effectsView },
-        { binding: 4, resource: this.bloomViewB },
+        { binding: 4, resource: this.bloomMips[0].view },
         { binding: 5, resource: { buffer: this.exposureBuffer } },
-        { binding: 6, resource: this.lutViewForHandle(this.currentLutHandle) }
+        { binding: 6, resource: this.lutViewForHandle(this.currentLutHandle) },
+        { binding: 7, resource: this.normalView },
+        { binding: 8, resource: this.depthView }
       ]
     });
   }
@@ -863,8 +1024,6 @@ class WebGPURenderer {
     });
     this.normalView = this.normalTexture.createView();
     this.effectsTexture?.destroy();
-    this.bloomTextureA?.destroy();
-    this.bloomTextureB?.destroy();
     const halfSize = [Math.max(1, Math.floor(width / 2)), Math.max(1, Math.floor(height / 2))];
     this.effectsTexture = this.device.createTexture({
       label: "egn-effects",
@@ -873,20 +1032,7 @@ class WebGPURenderer {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
     });
     this.effectsView = this.effectsTexture.createView();
-    this.bloomTextureA = this.device.createTexture({
-      label: "egn-bloom-a",
-      size: halfSize,
-      format: "rgba16float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    });
-    this.bloomTextureB = this.device.createTexture({
-      label: "egn-bloom-b",
-      size: halfSize,
-      format: "rgba16float",
-      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-    });
-    this.bloomViewA = this.bloomTextureA.createView();
-    this.bloomViewB = this.bloomTextureB.createView();
+    this.createBloomChain(halfSize[0], halfSize[1]);
     this.createPostBindGroup();
     this.effectsBindGroup = this.device.createBindGroup({
       layout: this.effectsLayout,
@@ -899,24 +1045,6 @@ class WebGPURenderer {
         { binding: 5, resource: { buffer: this.effectsUniformBuffer } }
       ]
     });
-    this.bloomBindGroups = [
-      this.device.createBindGroup({
-        layout: this.bloomLayout,
-        entries: [
-          { binding: 0, resource: this.hdrView },
-          { binding: 1, resource: this.bloomSampler },
-          { binding: 2, resource: { buffer: this.bloomUniformBuffers[0] } }
-        ]
-      }),
-      this.device.createBindGroup({
-        layout: this.bloomLayout,
-        entries: [
-          { binding: 0, resource: this.bloomViewA },
-          { binding: 1, resource: this.bloomSampler },
-          { binding: 2, resource: { buffer: this.bloomUniformBuffers[1] } }
-        ]
-      })
-    ];
     this.exposureBindGroup = this.device.createBindGroup({
       layout: this.exposureLayout,
       entries: [
@@ -925,6 +1053,151 @@ class WebGPURenderer {
         { binding: 2, resource: { buffer: this.exposureUniformBuffer } }
       ]
     });
+  }
+  createBloomChain(width, height) {
+    for (const mip of this.bloomMips ?? []) {
+      mip.texture.destroy();
+      mip.downBuffer.destroy();
+      mip.upBuffer.destroy();
+    }
+    this.bloomMips = [];
+    let w = width, h = height;
+    for (let i = 0; i < BLOOM_MAX_MIPS; i++) {
+      // Stop once a mip gets too small to add anything useful.
+      if (i > 0 && (w < 4 || h < 4)) break;
+      const texture = this.device.createTexture({
+        label: `egn-bloom-mip-${i}`,
+        size: [w, h],
+        format: "rgba16float",
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+      });
+      const createBuffer = (label) => this.device.createBuffer({
+        label, size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+      });
+      this.bloomMips.push({ texture, view: texture.createView(), width: w, height: h,
+        downBuffer: createBuffer(`egn-bloom-down-${i}`), upBuffer: createBuffer(`egn-bloom-up-${i}`) });
+      w = Math.max(1, Math.floor(w / 2));
+      h = Math.max(1, Math.floor(h / 2));
+    }
+    const bind = (view, buffer) => this.device.createBindGroup({
+      layout: this.bloomLayout,
+      entries: [
+        { binding: 0, resource: view },
+        { binding: 1, resource: this.bloomSampler },
+        { binding: 2, resource: { buffer } },
+        { binding: 3, resource: { buffer: this.exposureBuffer } }
+      ]
+    });
+    for (let i = 0; i < this.bloomMips.length; i++) {
+      const mip = this.bloomMips[i];
+      // Downsample into mip i reads the scene (i = 0) or mip i - 1.
+      mip.downBindGroup = bind(i === 0 ? this.hdrView : this.bloomMips[i - 1].view, mip.downBuffer);
+      // Upsample into mip i reads mip i + 1.
+      mip.upBindGroup = i + 1 < this.bloomMips.length
+        ? bind(this.bloomMips[i + 1].view, mip.upBuffer) : null;
+    }
+  }
+  bloomMipCount(settings) {
+    const wanted = [4, 5, 6, BLOOM_MAX_MIPS][settings?.bloom_quality ?? 2] ?? 6;
+    return Math.min(wanted, this.bloomMips?.length ?? 0);
+  }
+  // Derives the sun colour, sky/ground ambient and fog colour from the same
+  // atmosphere model the sky renders, so the lighting always matches the
+  // visible sky. Also re-renders the sky LUT when its inputs change.
+  updateAtmosphere(encoder, sun, camera) {
+    const settings = this.graphicsSettings ?? {};
+    const enabled = settings.atmosphere_enabled ?? true;
+    const night = [0.006, 0.009, 0.018];
+    const lighting = {
+      sunDirection: [0, -1, 0], sunIntensity: 0, sunColor: [0, 0, 0],
+      zenith: night.slice(), horizon: night.slice(), ground: [0, 0, 0], fog: night.slice()
+    };
+    if (sun) {
+      lighting.sunDirection = this.math.vec3.normalize([sun.world[8], sun.world[9], sun.world[10]]);
+      lighting.sunIntensity = sun.intensity;
+      lighting.sunColor = [sun.color[0], sun.color[1], sun.color[2]];
+    }
+    if (!enabled) {
+      const ambient = this.ambient.slice(0, 3).map((value) => value * 2.2);
+      lighting.zenith = ambient;
+      lighting.horizon = ambient;
+      lighting.ground = ambient.map((value) => value * 0.5);
+      lighting.fog = ambient;
+      this.atmosphereLighting = lighting;
+      return lighting;
+    }
+
+    const altitudeKm = Math.max(0, Math.trunc((camera?.world[13] ?? 0) * 0.02) * 0.05);
+    const rawSun = lighting.sunColor.map((value) => value * lighting.sunIntensity);
+    const params = {
+      sunDirection: lighting.sunDirection,
+      sunColor: rawSun,
+      rayleigh: settings.atmosphere_rayleigh ?? 1,
+      mie: settings.atmosphere_mie ?? 0.0035,
+      turbidity: settings.atmosphere_turbidity ?? 2.4,
+      mieAnisotropy: settings.atmosphere_mie_anisotropy ?? 0.76,
+      sunIntensity: settings.atmosphere_sun_intensity ?? 20,
+      altitudeKm
+    };
+    const steps = [8, 12, 16, 24][settings.atmosphere_quality ?? 2] ?? 16;
+    const lightSteps = [2, 3, 4, 6][settings.atmosphere_quality ?? 2] ?? 4;
+    const lutData = new Float32Array([
+      ...params.sunDirection, altitudeKm,
+      ...rawSun, 0,
+      params.rayleigh, params.mie, params.turbidity, params.mieAnisotropy,
+      params.sunIntensity, steps, lightSteps, 0
+    ]);
+
+    // Everything below only depends on these inputs, so it is cached.
+    const key = Array.from(lutData).join(",");
+    if (key !== this.skyLutKey) {
+      this.skyLutKey = key;
+      this.device.queue.writeBuffer(this.skyLutUniformBuffer, 0, lutData);
+      const pass = encoder.beginRenderPass({
+        label: "egn-sky-lut-pass",
+        colorAttachments: [{ view: this.skyLutView, loadOp: "clear", storeOp: "store",
+          clearValue: { r: 0, g: 0, b: 0, a: 1 } }]
+      });
+      pass.setPipeline(this.skyLutPipeline);
+      pass.setBindGroup(0, this.skyLutBindGroup);
+      pass.draw(3);
+      pass.end();
+
+      const cached = { sunColor: lighting.sunColor.slice(), zenith: night.slice(), horizon: night.slice() };
+      if (sun && lighting.sunIntensity > 0) {
+        const transmittance = atmosphereSunTransmittance(params, 12);
+        // Fade the direct light out as the sun sinks below the horizon.
+        const above = Math.max(0, Math.min(1, params.sunDirection[1] * 12 + 0.6));
+        cached.sunColor = lighting.sunColor.map((value, c) => value * transmittance[c] * above);
+        const zenith = atmosphereSkyRadiance(params, [0, 1, 0], 10, 4);
+        // Average the horizon ring so the ambient does not depend on the view.
+        const ring = [0, 0, 0];
+        for (let i = 0; i < 6; i++) {
+          const angle = i * Math.PI / 3;
+          const direction = this.math.vec3.normalize([Math.cos(angle), 0.12, Math.sin(angle)]);
+          const radiance = atmosphereSkyRadiance(params, direction, 10, 4);
+          for (let c = 0; c < 3; c++) ring[c] += radiance[c] / 6;
+        }
+        cached.zenith = night.map((value, c) => value + zenith[c]);
+        cached.horizon = night.map((value, c) => value + ring[c]);
+      }
+      this.skyLightingCache = cached;
+    }
+
+    const cached = this.skyLightingCache;
+    lighting.sunColor = cached.sunColor;
+    lighting.zenith = cached.zenith;
+    lighting.horizon = cached.horizon;
+    lighting.fog = cached.horizon;
+    // Light bounced by the terrain: a neutral soil albedo lit by sun and sky.
+    // The zenith dominates the sky irradiance (the bright horizon ring covers
+    // little solid angle and arrives at grazing angles).
+    const groundAlbedo = [0.22, 0.20, 0.17];
+    const sunUp = Math.max(0, lighting.sunDirection[1]) * lighting.sunIntensity;
+    lighting.ground = groundAlbedo.map((albedo, c) => albedo *
+      (cached.sunColor[c] * sunUp + cached.horizon[c] * 0.35 + cached.zenith[c] * 0.65));
+    this.atmosphereLighting = lighting;
+    return lighting;
   }
   floats(ptr, offset, count) {
     return new Float32Array(this.module.HEAPF32.buffer, ptr + offset * 4, count).slice();
@@ -1386,7 +1659,9 @@ class WebGPURenderer {
           entries: [
             { binding: 0, resource: { buffer } },
             { binding: 1, resource: this.shadowView },
-            { binding: 2, resource: this.shadowSampler }
+            { binding: 2, resource: this.shadowSampler },
+            { binding: 3, resource: this.skyLutView },
+            { binding: 4, resource: this.skyLutSampler }
           ]
         })
       };
@@ -1399,21 +1674,18 @@ class WebGPURenderer {
     data.set([camera.world[12], camera.world[13], camera.world[14], 1], 16);
     data.set([0, -1, 0, 0], 24);
     data.set([0, 0, 0, 0], 28);
-    let sunDirection = [0, -1, 0];
-    if (sun) {
-      sunDirection = this.math.vec3.normalize([sun.world[8], sun.world[9], sun.world[10]]);
-      data.set([sunDirection[0], sunDirection[1], sunDirection[2], sun.intensity], 24);
-      data.set([sun.color[0], sun.color[1], sun.color[2], 0.68], 28);
-    }
-    const day = Math.max(0, Math.min(1, sunDirection[1] * 3 + 0.35));
-    const nightAmbient = [0.020, 0.028, 0.055];
-    const dayAmbient = [0.20, 0.28, 0.42];
-    const ambientScale = day * (0.6 + 0.4 * (settings.atmosphere_rayleigh ?? 1));
+    // Sun, sky and fog colours come from updateAtmosphere(), which derives
+    // them from the atmosphere model so they match the rendered sky.
+    const lighting = this.atmosphereLighting;
+    const atmosphereEnabled = settings.atmosphere_enabled ?? true;
+    data.set([...lighting.sunDirection, lighting.sunIntensity], 24);
+    // w = shadow strength: shadows fully block the sun; the sky/ground
+    // ambient is what keeps them from being black.
+    data.set([...lighting.sunColor, 1], 28);
     data.set([
-      nightAmbient[0] + (dayAmbient[0] - nightAmbient[0]) * ambientScale,
-      nightAmbient[1] + (dayAmbient[1] - nightAmbient[1]) * ambientScale,
-      nightAmbient[2] + (dayAmbient[2] - nightAmbient[2]) * ambientScale,
-      (settings.atmosphere_enabled ?? true) ? 0.8 : 1.0
+      lighting.horizon[0] * 0.35 + lighting.zenith[0] * 0.65,
+      lighting.horizon[1] * 0.35 + lighting.zenith[1] * 0.65,
+      lighting.horizon[2] * 0.35 + lighting.zenith[2] * 0.65, 1
     ], 20);
     for (let cascade = 0; cascade < SHADOW_CASCADES; cascade++) {
       const matrix = cascades.matrices[cascade] ?? this.math.mat4.identity();
@@ -1437,12 +1709,19 @@ class WebGPURenderer {
     data.set([settings.atmosphere_sun_intensity ?? 20, steps, lightSteps,
       (settings.atmosphere_enabled ?? true) ? 1 : 0], 192);
     data.set([settings.fog_density ?? 0.008, settings.fog_height_falloff ?? 0.12,
-      (settings.fog_enabled ?? true) ? 1 : 0, 0], 196);
-    const sunColor = sun?.color ?? [1, 1, 1];
-    data.set([0.20 * (0.35 + 0.65 * day) + sunColor[0] * 0.05,
-      0.28 * (0.35 + 0.65 * day) + sunColor[1] * 0.05,
-      0.36 * (0.35 + 0.65 * day) + sunColor[2] * 0.05, 0], 200);
+      (settings.fog_enabled ?? true) ? 1 : 0, atmosphereEnabled ? 1 : 0], 196);
+    data.set([...lighting.fog, 0], 200);
     data.set([this.elapsedTime, 0, 0, 0], 204);
+    data.set(cascades.texels, 208);
+    data.set([cascades.far, cascades.far * 0.12, 0.12, 0], 212);
+    data.set([...lighting.zenith, 1], 216);
+    data.set([...lighting.horizon, 1], 220);
+    data.set([...lighting.ground, 1], 224);
+    // The disc is the sun seen through the atmosphere, far brighter than any
+    // surface so bloom and exposure react to it.
+    const disc = lighting.sunIntensity * 80;
+    data.set([lighting.sunColor[0] * disc, lighting.sunColor[1] * disc,
+      lighting.sunColor[2] * disc, 0], 228);
     this.device.queue.writeBuffer(gpu.buffer, 0, data);
     return gpu;
   }
@@ -1454,6 +1733,8 @@ class WebGPURenderer {
         this.math.mat4.identity(), this.math.mat4.identity()
       ],
       splits: [0, 0, 0, 0],
+      texels: [0, 0, 0, 0],
+      far: 0,
       count: 0
     };
     if (!sun || !sun.castShadows || !camera) {
@@ -1461,13 +1742,16 @@ class WebGPURenderer {
     }
 
     const settings = this.graphicsSettings ?? {};
-    const direction = this.math.vec3.normalize([sun.world[8], sun.world[9], sun.world[10]]);
+    const vec3 = this.math.vec3;
+    const direction = vec3.normalize([sun.world[8], sun.world[9], sun.world[10]]);
     const near = Math.max(0.05, camera.near ?? 0.1);
     let far = Math.min(camera.far ?? 300, settings.shadow_distance ?? 120);
     if (far <= near + 0.1) far = near + 0.1;
 
+    // Practical split scheme. A higher lambda concentrates resolution close
+    // to the camera, where shadow detail is actually visible.
     const splits = [];
-    const lambda = 0.65;
+    const lambda = 0.82;
     for (let i = 0; i < count; i++) {
       const p = (i + 1) / count;
       const logarithmic = near * Math.pow(far / near, p);
@@ -1475,53 +1759,60 @@ class WebGPURenderer {
       splits.push(Math.min(far, lambda * logarithmic + (1 - lambda) * linear));
     }
 
-    const fov = camera.fov ?? Math.PI / 3;
-    const aspect = camera.aspect ?? 1;
+    // Light basis. It only depends on the sun direction, so the shadow texels
+    // keep a fixed orientation in the world while the camera moves.
+    const referenceUp = Math.abs(direction[1]) > 0.99 ? [0, 0, 1] : [0, 1, 0];
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const lightRight = vec3.normalize(cross(referenceUp, direction));
+    const lightUp = cross(direction, lightRight);
+
+    const world = camera.world;
+    const cameraPosition = [world[12], world[13], world[14]];
+    const cameraForward = vec3.normalize([-world[8], -world[9], -world[10]]);
+    const tanY = Math.tan((camera.fov ?? Math.PI / 3) * 0.5);
+    const tanX = tanY * (camera.aspect ?? 1);
+    const k = tanX * tanX + tanY * tanY;
+
+    // Distance kept between the cascade volume and the light so tall casters
+    // outside the camera frustum still reach the shadow map.
+    const pullback = 150;
+
     for (let cascade = 0; cascade < count; cascade++) {
-      const cascadeNear = cascade === 0 ? near : splits[cascade - 1];
-      const cascadeFar = splits[cascade];
-      const projection = this.math.mat4.perspective(fov, aspect, cascadeNear, cascadeFar);
-      const inverse = this.math.mat4.inverse(this.math.mat4.multiply(projection, camera.view));
+      const n = cascade === 0 ? near : splits[cascade - 1];
+      const f = splits[cascade];
 
-      const corners = [];
-      for (let z = 0; z < 2; z++) {
-        for (let y = 0; y < 2; y++) {
-          for (let x = 0; x < 2; x++) {
-            const world = transformVec4(inverse, [x ? 1 : -1, y ? 1 : -1, z ? 1 : 0, 1]);
-            const invW = world[3] !== 0 ? 1 / world[3] : 1;
-            corners.push([world[0] * invW, world[1] * invW, world[2] * invW]);
-          }
-        }
+      // Minimal bounding sphere of the frustum slice. Its radius does not
+      // change when the camera rotates, which (together with the texel
+      // snapping below) removes the shimmering of the shadow edges.
+      let centerDistance, radius;
+      if (k >= (f - n) / (f + n)) {
+        centerDistance = f;
+        radius = f * Math.sqrt(k);
+      } else {
+        centerDistance = 0.5 * (f + n) * (1 + k);
+        radius = 0.5 * Math.sqrt((f - n) * (f - n) + 2 * (f * f + n * n) * k + (f + n) * (f + n) * k * k);
       }
+      radius = Math.max(0.5, Math.ceil(radius * 16) / 16);
 
-      const center = [0, 0, 0];
-      for (const corner of corners) {
-        center[0] += corner[0] / 8;
-        center[1] += corner[1] / 8;
-        center[2] += corner[2] / 8;
-      }
-      let radius = 0;
-      for (const corner of corners) {
-        const dx = corner[0] - center[0];
-        const dy = corner[1] - center[1];
-        const dz = corner[2] - center[2];
-        radius = Math.max(radius, Math.hypot(dx, dy, dz));
-      }
-      radius = Math.max(0.5, radius * 1.08);
-
-      let up = [0, 1, 0];
-      if (Math.abs(this.math.vec3.dot(direction, up)) > 0.99) {
-        up = [0, 0, 1];
-      }
-      const lightPosition = [
-        center[0] + direction[0] * (radius + 10),
-        center[1] + direction[1] * (radius + 10),
-        center[2] + direction[2] * (radius + 10)
+      let center = [
+        cameraPosition[0] + cameraForward[0] * centerDistance,
+        cameraPosition[1] + cameraForward[1] * centerDistance,
+        cameraPosition[2] + cameraForward[2] * centerDistance
       ];
-      const lightView = this.math.mat4.lookAt(lightPosition, center, up);
-      const lightProjection = this.math.mat4.ortho(-radius, radius, -radius, radius, 0.1, radius * 2 + 20);
+
+      // Snap the volume to whole shadow texels in light space.
+      const texel = radius * 2 / this.shadowSize;
+      const alongRight = Math.floor(vec3.dot(center, lightRight) / texel) * texel;
+      const alongUp = Math.floor(vec3.dot(center, lightUp) / texel) * texel;
+      const alongSun = vec3.dot(center, direction);
+      center = [0, 1, 2].map((i) => lightRight[i] * alongRight + lightUp[i] * alongUp + direction[i] * alongSun);
+
+      const lightPosition = center.map((value, i) => value + direction[i] * (radius + pullback));
+      const lightView = this.math.mat4.lookAt(lightPosition, center, lightUp);
+      const lightProjection = this.math.mat4.ortho(-radius, radius, -radius, radius, 0, radius * 2 + pullback);
       const matrix = this.math.mat4.multiply(lightProjection, lightView);
       result.matrices[cascade] = matrix;
+      result.texels[cascade] = texel;
       this.device.queue.writeBuffer(this.shadowGlobals[cascade], 0, new Float32Array(matrix));
     }
 
@@ -1529,6 +1820,7 @@ class WebGPURenderer {
       splits.push(splits[count - 1]);
     }
     result.splits = splits.slice(0, SHADOW_CASCADES);
+    result.far = far;
     result.count = count;
     return result;
   }
@@ -1621,6 +1913,7 @@ class WebGPURenderer {
         pass.end();
       }
     }
+    this.updateAtmosphere(encoder, sun, camera);
     const frameBindGroups = /* @__PURE__ */ new Map();
     for (const cam of scene.cameras) {
       frameBindGroups.set(cam, this.cameraFrame(cam, cascades, sun, pointLights, shadowEnabled).bindGroup);
@@ -1734,7 +2027,7 @@ class WebGPURenderer {
       effectsData.set([camera.world[12], camera.world[13], camera.world[14], 1], 32);
       effectsData.set([settings.ao_radius ?? 1, settings.ao_intensity ?? 0.7,
         settings.gi_intensity ?? 0.55, settings.gi_distance ?? 12], 36);
-      effectsData.set([samples, this.effectsTexture.width, this.effectsTexture.height,
+      effectsData.set([samples, 1 / Math.tan((camera.fov ?? Math.PI / 3) * 0.5), camera.aspect ?? 1,
         (settings.ao_enabled ? 1 : 0) | (settings.gi_enabled ? 2 : 0)], 40);
       this.device.queue.writeBuffer(this.effectsUniformBuffer, 0, effectsData);
 
@@ -1753,36 +2046,42 @@ class WebGPURenderer {
       effectsPass.end();
     }
 
-    if (settings.bloom_enabled && this.bloomBindGroups.length === 2) {
-      const quality = settings.bloom_quality ?? 2;
-      const radius = [2, 3, 4, 5][quality] ?? 4;
-      const halfWidth = this.bloomTextureA.width;
-      const halfHeight = this.bloomTextureA.height;
-      const horizontal = new Float32Array([
-        1, 0, settings.bloom_threshold ?? 1.1, 0,
-        1 / halfWidth, 1 / halfHeight, radius, 1
-      ]);
-      const vertical = new Float32Array([
-        0, 1, 0, 0,
-        1 / halfWidth, 1 / halfHeight, radius, 0
-      ]);
-      this.device.queue.writeBuffer(this.bloomUniformBuffers[0], 0, horizontal);
-      this.device.queue.writeBuffer(this.bloomUniformBuffers[1], 0, vertical);
-
-      for (let passIndex = 0; passIndex < 2; passIndex++) {
-        const bloomPass = encoder.beginRenderPass({
-          label: `egn-bloom-${passIndex}`,
-          colorAttachments: [{
-            view: passIndex === 0 ? this.bloomViewA : this.bloomViewB,
-            clearValue: { r: 0, g: 0, b: 0, a: 1 },
-            loadOp: "clear",
-            storeOp: "store"
-          }]
+    const bloomMips = this.bloomMipCount(settings);
+    if (settings.bloom_enabled && bloomMips > 0) {
+      const manualExposure = Math.pow(2, settings.exposure_compensation ?? 0);
+      const upRadius = 0.6 + (settings.bloom_radius ?? 0.55);
+      const bloomPass = (target, pipeline, bindGroup, load) => {
+        const pass = encoder.beginRenderPass({
+          label: "egn-bloom",
+          colorAttachments: [{ view: target.view, loadOp: load ? "load" : "clear", storeOp: "store",
+            clearValue: { r: 0, g: 0, b: 0, a: 1 } }]
         });
-        bloomPass.setPipeline(this.bloomPipeline);
-        bloomPass.setBindGroup(0, this.bloomBindGroups[passIndex]);
-        bloomPass.draw(3);
-        bloomPass.end();
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.draw(3);
+        pass.end();
+      };
+
+      // Downsample chain: scene -> mip 0 (thresholded) -> mip 1 -> ...
+      for (let i = 0; i < bloomMips; i++) {
+        const mip = this.bloomMips[i];
+        const sourceWidth = i === 0 ? this.canvas.width : this.bloomMips[i - 1].width;
+        const sourceHeight = i === 0 ? this.canvas.height : this.bloomMips[i - 1].height;
+        this.device.queue.writeBuffer(mip.downBuffer, 0, new Float32Array([
+          1 / sourceWidth, 1 / sourceHeight, i === 0 ? 0 : 1, 0,
+          settings.bloom_threshold ?? 1.1, manualExposure, settings.auto_exposure_enabled ? 1 : 0, 0
+        ]));
+        bloomPass(mip, this.bloomPipeline, mip.downBindGroup, false);
+      }
+      // Upsample chain: each mip is blurred and added onto the next larger
+      // one, so mip 0 ends up holding the sum of every blur radius.
+      for (let i = bloomMips - 2; i >= 0; i--) {
+        const mip = this.bloomMips[i];
+        const source = this.bloomMips[i + 1];
+        this.device.queue.writeBuffer(mip.upBuffer, 0, new Float32Array([
+          1 / source.width, 1 / source.height, 2, upRadius, 0, 0, 0, 0
+        ]));
+        bloomPass(mip, this.bloomUpPipeline, mip.upBindGroup, true);
       }
     }
 
@@ -1861,8 +2160,11 @@ class WebGPURenderer {
     data[21] = s.gi_enabled ? 1 : 0;
     data[22] = s.gi_intensity ?? 0.55;
     data[23] = s.ao_intensity ?? 0.7;
-    data[24] = s.bloom_enabled ? 1 : 0;
-    data[25] = s.bloom_intensity ?? 0.055;
+    // The chain sums one blur per mip; normalise so the intensity setting
+    // keeps its meaning whatever the quality level.
+    const bloomMips = this.bloomMipCount(s);
+    data[24] = s.bloom_enabled && bloomMips > 0 ? 1 : 0;
+    data[25] = (s.bloom_intensity ?? 0.055) * (bloomMips > 0 ? 4 / bloomMips : 0);
     data[26] = s.bloom_threshold ?? 1.1;
     data[27] = s.bloom_radius ?? 0.55;
     data[28] = s.auto_exposure_enabled ? 1 : 0;
@@ -1876,12 +2178,16 @@ class WebGPURenderer {
     this.hdrTexture?.destroy();
     this.normalTexture?.destroy();
     this.effectsTexture?.destroy();
-    this.bloomTextureA?.destroy();
-    this.bloomTextureB?.destroy();
+    for (const mip of this.bloomMips ?? []) {
+      mip.texture.destroy();
+      mip.downBuffer.destroy();
+      mip.upBuffer.destroy();
+    }
+    this.skyLutTexture?.destroy();
+    this.skyLutUniformBuffer?.destroy();
     this.flatNormalTexture?.destroy();
     this.blackTexture?.destroy();
     this.postUniformBuffer?.destroy();
-    for (const buffer of this.bloomUniformBuffers) buffer.destroy();
     this.exposureUniformBuffer?.destroy();
     this.exposureBuffer?.destroy();
     this.shadowTexture?.destroy();

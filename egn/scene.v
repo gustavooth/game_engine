@@ -145,6 +145,17 @@ pub mut:
 // Camera3D is the explicit name for the existing 3D Camera component.
 pub type Camera3D = Camera
 
+// ModelSurface selects a procedural shading path for a Model.
+//   .terrain  grass/rock/sand/snow blended from height, slope and the mesh UVs
+//             (u = sand weight, v = rock weight).
+//   .ocean    depth-tinted water with waves and shore foam
+//             (u = water depth in metres, v = wave scale: 1 sea, 0 calm lake).
+pub enum ModelSurface {
+	standard = 0
+	terrain  = 1
+	ocean    = 2
+}
+
 // Model renders a 3D mesh with a solid colour/texture.
 pub struct Model {
 mut:
@@ -157,6 +168,7 @@ pub mut:
 	roughness    f32 = 1.0
 	cast_shadows bool    = true
 	water        bool
+	surface      ModelSurface
 	enabled      bool    = true
 }
 
@@ -495,6 +507,7 @@ pub fn (o Object) add_component[T](component T) T {
 			C.egn_model_get_pbr(h, &result.metallic, &result.roughness)
 		}
 		C.egn_model_set_water(h, component.water)
+		C.egn_model_set_surface(h, u32(component.surface))
 		return result
 	} $else $if T is Sprite {
 		h := C.egn_object_add_sprite(o.handle, component.texture.id, component.size.x, component.size.y,
@@ -924,6 +937,12 @@ pub fn (mut m Model) set_water(water bool) {
 	m.water = water
 }
 
+// set_surface selects the procedural shading path (terrain/ocean).
+pub fn (mut m Model) set_surface(surface ModelSurface) {
+	C.egn_model_set_surface(m.handle, u32(surface))
+	m.surface = surface
+}
+
 pub fn (mut m Model) destroy() {
 	C.egn_component_destroy(m.handle)
 	m.handle = voidptr(0)
@@ -940,6 +959,7 @@ pub fn (mut m Model) apply() {
 	}
 	C.egn_model_set_cast_shadows(m.handle, m.cast_shadows)
 	C.egn_model_set_water(m.handle, m.water)
+	C.egn_model_set_surface(m.handle, u32(m.surface))
 	C.egn_component_set_enabled(m.handle, m.enabled)
 }
 

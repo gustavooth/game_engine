@@ -27,7 +27,11 @@ pub mut:
 	y          int    = 100
 	vsync      bool   = true
 	target_fps int
-	graphics   GraphicsSettings
+	// headless runs the engine as a server: no window, no renderer, nothing
+	// is drawn. Scene, physics, events and networking keep working and
+	// target_fps becomes the tick rate.
+	headless bool
+	graphics GraphicsSettings
 }
 
 pub enum GraphicsQuality {
@@ -289,6 +293,7 @@ pub fn create(settings Settings) !Engine {
 		window_pos_y:  settings.y
 		vsync:         settings.vsync
 		target_fps:    settings.target_fps
+		headless:      settings.headless
 	}
 
 	mut handle := voidptr(0)
@@ -337,6 +342,11 @@ pub fn (mut e Engine) destroy() {
 
 // set_vsync enables/disables vertical sync. Changing it recreates the
 // swapchain on the next frame.
+// is_headless reports whether the engine runs without window/renderer.
+pub fn (e &Engine) is_headless() bool {
+	return e.handle != 0 && C.engine_is_headless(e.handle)
+}
+
 pub fn (e &Engine) set_vsync(vsync bool) {
 	C.engine_set_vsync(e.handle, vsync)
 }
@@ -401,6 +411,33 @@ pub fn (e &Engine) canvas_pick(x f32, y f32) ?Object {
 		return none
 	}
 	return e.object_by_id(id)
+}
+
+// canvas_hovered is true while the mouse cursor is over the canvas object:
+// the top-most canvas sprite under the cursor belongs to `object` or to one of
+// its descendants. It is always false while the pointer is locked, because a
+// locked pointer has no cursor position.
+pub fn (e &Engine) canvas_hovered(object Object) bool {
+	if !object.is_valid() || e.pointer_locked() {
+		return false
+	}
+	x, y := e.mouse_position()
+	hit := e.canvas_pick(f32(x), f32(y)) or { return false }
+	target := object.id()
+	mut current := hit
+	for _ in 0 .. 64 {
+		if current.id() == target {
+			return true
+		}
+		current = current.parent() or { return false }
+	}
+	return false
+}
+
+// canvas_clicked is true on the frame `button` is pressed with the cursor
+// over the canvas object (see canvas_hovered).
+pub fn (e &Engine) canvas_clicked(object Object, button MouseButton) bool {
+	return e.mouse_pressed(button) && e.canvas_hovered(object)
 }
 
 // ---------------------------------------------------------------------------

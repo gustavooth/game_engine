@@ -112,9 +112,11 @@ RendererGraphicsSettings renderer_graphics_settings_preset(RendererGraphicsPrese
   settings.auto_exposure_max_ev = 6.0f;
   settings.auto_exposure_speed = 1.5f;
 
+  // A gentle S-curve and vibrance give the default look its punch; the low
+  // preset below keeps the neutral values.
   settings.color_grading_enabled = true;
-  settings.contrast = 1.0f;
-  settings.saturation = 1.0f;
+  settings.contrast = 1.08f;
+  settings.saturation = 1.18f;
   settings.temperature = 0.0f;
   settings.tint = 0.0f;
   settings.lift_r = 0.0f;
@@ -148,6 +150,8 @@ RendererGraphicsSettings renderer_graphics_settings_preset(RendererGraphicsPrese
     settings.auto_exposure_max_ev = 4.0f;
     settings.auto_exposure_speed = 1.0f;
     settings.vignette = 0.0f;
+    settings.contrast = 1.0f;
+    settings.saturation = 1.0f;
     set_shadows(&settings, RENDERER_QUALITY_LOW);
     set_post_effects(&settings, RENDERER_QUALITY_LOW);
     set_ambient_effects(&settings, RENDERER_QUALITY_LOW);

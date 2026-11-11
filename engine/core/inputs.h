@@ -172,3 +172,8 @@ void inputs_process_button(Buttons button, b8 pressed);
 void inputs_process_mouse_move(i16 x, i16 y);
 void inputs_process_mouse_delta(f32 dx, f32 dy);
 void inputs_process_mouse_wheel(i8 z_delta);
+
+// Releases every key and mouse button (firing the release events). Called
+// when the window loses keyboard focus: the release events of keys held at
+// that moment go to another window and would otherwise leave them stuck.
+void inputs_release_all(void);

@@ -48,6 +48,7 @@ typedef struct EgnModelData
   f32 roughness;
   b8 cast_shadows;
   b8 water;
+  u32 surface; // EgnModelSurface
 
   // Renderer-owned per-instance animation state and current bone slot.
   void *anim_state;

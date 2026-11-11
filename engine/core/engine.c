@@ -51,6 +51,7 @@ typedef struct EngineState
 
   b8 vsync;
   i32 target_fps;
+  b8 headless;
 } EngineState;
 
 static EngineState *engine_ptr;
@@ -186,28 +187,36 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
   }
   instance->inputs_ready = true;
 
-  if (!window_create(settings->window_name,
-                     settings->window_pos_x, settings->window_pos_y, settings->window_width,
-                     settings->window_height, &engine_ptr->window))
-  {
-    EGNERROR("engine_create_instance: failed to initialize window state");
-    engine_cleanup(instance);
-    return false;
-  }
-  instance->window_ready = true;
-
-  window_show(&engine_ptr->window);
-
+  engine_ptr->headless = settings->headless;
   engine_ptr->vsync = settings->vsync;
   engine_ptr->target_fps = settings->target_fps;
 
-  if (!renderer_initialize(&engine_ptr->window, settings->window_width, settings->window_height, settings->vsync))
+  if (settings->headless)
   {
-    EGNERROR("engine_create_instance: failed to initialize renderer state");
-    engine_cleanup(instance);
-    return false;
+    EGNINFO("Engine running in headless mode: no window, no renderer.");
   }
-  instance->renderer_ready = true;
+  else
+  {
+    if (!window_create(settings->window_name,
+                       settings->window_pos_x, settings->window_pos_y, settings->window_width,
+                       settings->window_height, &engine_ptr->window))
+    {
+      EGNERROR("engine_create_instance: failed to initialize window state");
+      engine_cleanup(instance);
+      return false;
+    }
+    instance->window_ready = true;
+
+    window_show(&engine_ptr->window);
+
+    if (!renderer_initialize(&engine_ptr->window, settings->window_width, settings->window_height, settings->vsync))
+    {
+      EGNERROR("engine_create_instance: failed to initialize renderer state");
+      engine_cleanup(instance);
+      return false;
+    }
+    instance->renderer_ready = true;
+  }
 
   if (!egn_scene_initialize())
   {
@@ -237,7 +246,7 @@ EGNAPI b8 engine_create_instance(EngineSettings *settings, void **out_instance_p
   memo_write_memory_usage_str(engine_ptr->memory_usage_str, 2048);
 
   EGNINFO("Game Engine has been initialized in %f seconds!", engine_ptr->clock.elapsed);
-  EGNDEBUG(engine_ptr->memory_usage_str);
+  EGNDEBUG("%s", engine_ptr->memory_usage_str);
 
   // Restart the clock so delta time starts counting from the first frame.
   clock_start(&engine_ptr->clock);
@@ -275,13 +284,17 @@ EGNAPI b8 engine_frame(void *instance_ptr)
   }
 
   inputs_update(delta);
-  window_process_messages(&engine_ptr->window);
+  if (engine_ptr->window_ready)
+    window_process_messages(&engine_ptr->window);
 
   egn_scene_update(delta);
   egn_physics_update(delta);
 
-  RenderPacket packet = {delta};
-  renderer_draw_frame(packet);
+  if (engine_ptr->renderer_ready)
+  {
+    RenderPacket packet = {delta};
+    renderer_draw_frame(packet);
+  }
 
   if (engine_ptr->target_fps > 0)
   {
@@ -332,7 +345,7 @@ EGNAPI f64 engine_get_elapsed_time(void *instance_ptr)
 
 EGNAPI b8 engine_get_window_size(void *instance_ptr, i32 *out_width, i32 *out_height)
 {
-  if (!engine_ptr || instance_ptr != engine_ptr)
+  if (!engine_ptr || instance_ptr != engine_ptr || !engine_ptr->window_ready)
     return false;
 
   u32 width = 0;
@@ -390,6 +403,9 @@ b8 engine_on_resize(u16 code, void *sender, EventContext data)
 {
   EGNDEBUG("Event EVENT_CODE_RESIZED received!")
 
+  if (!engine_ptr || !engine_ptr->renderer_ready)
+    return false;
+
   renderer_resize((u32)data.data.u16[0], (u32)data.data.u16[1]);
 
   return false;
@@ -401,7 +417,8 @@ EGNAPI void engine_set_vsync(void *instance_ptr, b8 vsync)
     return;
 
   engine_ptr->vsync = vsync;
-  renderer_set_vsync(vsync);
+  if (engine_ptr->renderer_ready)
+    renderer_set_vsync(vsync);
 }
 
 EGNAPI b8 engine_get_vsync(void *instance_ptr)
@@ -429,6 +446,8 @@ EGNAPI void engine_set_pointer_lock(void *instance_ptr, b8 locked)
 {
   if (!engine_ptr || (instance_ptr && instance_ptr != engine_ptr))
     return;
+  if (!engine_ptr->window_ready)
+    return;
   window_set_pointer_lock(&engine_ptr->window, locked);
 }
 
@@ -436,5 +455,14 @@ EGNAPI b8 engine_is_pointer_locked(void *instance_ptr)
 {
   if (!engine_ptr || instance_ptr != engine_ptr)
     return false;
+  if (!engine_ptr->window_ready)
+    return false;
   return window_is_pointer_locked(&engine_ptr->window);
+}
+
+EGNAPI b8 engine_is_headless(void *instance_ptr)
+{
+  if (!engine_ptr || instance_ptr != engine_ptr)
+    return false;
+  return engine_ptr->headless;
 }

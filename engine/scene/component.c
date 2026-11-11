@@ -230,6 +230,7 @@ void *egn_object_add_model(void *object_handle, u32 mesh, u32 texture,
   model->roughness = 1.0f;
   model->cast_shadows = cast_shadows;
   model->water = false;
+  model->surface = EGN_MODEL_SURFACE_STANDARD;
 
   component->enabled = enabled;
   return component;
@@ -787,6 +788,21 @@ b8 egn_model_get_water(void *model)
 {
   EgnModelData *data = model_data(model);
   return data ? data->water : false;
+}
+
+b8 egn_model_set_surface(void *model, u32 surface)
+{
+  EgnModelData *data = model_data(model);
+  if (!data || surface > EGN_MODEL_SURFACE_OCEAN)
+    return false;
+  data->surface = surface;
+  return true;
+}
+
+u32 egn_model_get_surface(void *model)
+{
+  EgnModelData *data = model_data(model);
+  return data ? data->surface : EGN_MODEL_SURFACE_STANDARD;
 }
 
 u32 egn_model_get_mesh(void *model)

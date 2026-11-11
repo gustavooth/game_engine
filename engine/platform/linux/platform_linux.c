@@ -5,14 +5,13 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <sys/time.h>
 #include <time.h>
 
 #ifdef EGNPLATFORM_WAYLAND
 
 typedef struct PlatformLinuxState
 {
-  struct timeval start_time;
+  struct timespec start_time;
 } PlatformLinuxState;
 
 static PlatformLinuxState *platform_ptr;
@@ -26,8 +25,10 @@ b8 platform_initialize(u64 *out_memory_requirement, void *state)
   }
   platform_ptr = (PlatformLinuxState *)state;
 
-  // Clock setup usando gettimeofday
-  if (gettimeofday(&platform_ptr->start_time, NULL) != 0)
+  // Monotonic clock: unlike the wall clock it never jumps when the system
+  // time is adjusted (NTP, suspend, manual change), which would otherwise
+  // produce negative or huge frame deltas.
+  if (clock_gettime(CLOCK_MONOTONIC, &platform_ptr->start_time) != 0)
   {
     EGNERROR("platform_initialize: failed to initialize clock");
     return false;
@@ -80,20 +81,14 @@ void platform_console_write_error(const char *message, u8 colour)
   printf("\033[%sm%s\033[0m", colour_strings[colour], message);
 }
 
-// Função que calcula o tempo de execução em segundos (f64)
+// Seconds elapsed since platform_initialize().
 f64 platform_get_absolute_time()
 {
-  struct timeval current_time;
-  gettimeofday(&current_time, NULL);
-
-  // Calcula a diferença em segundos e microssegundos
-  i64 seconds = current_time.tv_sec - platform_ptr->start_time.tv_sec;
-  i64 microseconds = current_time.tv_usec - platform_ptr->start_time.tv_usec;
-
-  // Retorna o tempo total em segundos como um f64
-  return (f64)seconds + (f64)microseconds / 1e6;
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (f64)(now.tv_sec - platform_ptr->start_time.tv_sec) +
+         (f64)(now.tv_nsec - platform_ptr->start_time.tv_nsec) * 1e-9;
 }
-
 #endif
 void platform_sleep(u64 ms)
 {

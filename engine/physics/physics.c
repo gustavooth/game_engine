@@ -512,8 +512,15 @@ void egn_physics_update(f64 delta_time)
     }
 
     EgnObject *object = component->owner;
-    if (!object || !object->alive || !object->active || !component->enabled)
+    if (!object || !object->alive || !component->enabled ||
+        !egn_object_is_active_in_hierarchy(object))
+    {
+      // A disabled collider or a deactivated object (or parent) must leave
+      // the simulation: the body used to stay behind as an invisible wall.
+      // It is recreated from the current transform when re-enabled.
+      destroy_collider_body(collider);
       continue;
+    }
 
     if (collider->body_created && collider->dirty)
       destroy_collider_body(collider);
@@ -566,6 +573,12 @@ void egn_physics_update(f64 delta_time)
     physics.accumulator -= EGN_PHYSICS_FIXED_STEP;
     steps++;
   }
+
+  // When the simulation cannot keep up, drop the backlog instead of letting
+  // it grow without bound (which would keep every later frame at the step
+  // cap and make the game run in permanent slow motion).
+  if (physics.accumulator > EGN_PHYSICS_FIXED_STEP)
+    physics.accumulator = EGN_PHYSICS_FIXED_STEP;
 
   // Push dynamic bodies back into the scene graph.
   for (u32 i = 0; i < scene->component_count; i++)

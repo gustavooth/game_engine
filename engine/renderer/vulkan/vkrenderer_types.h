@@ -13,7 +13,7 @@
 // Hard limits for renderer-owned resources. Handles returned to games are
 // 1-based indexes into these tables; 0 always means "invalid".
 #define VKRENDERER_MAX_TEXTURES 512
-#define VKRENDERER_MAX_MESHES 512
+#define VKRENDERER_MAX_MESHES 4096
 #define VKRENDERER_MAX_BONES 8192
 #define VKRENDERER_BONE_FRAMES 8
 #define VKRENDERER_MAX_PARTICLE_SYSTEMS 32
@@ -180,6 +180,9 @@ typedef struct VkRendererSubMesh
   u32 index_count;
   VkRendererMaterial material;
   VkDescriptorSet material_set;
+  // Local-space bounds of the vertices, used to build the mesh bounding sphere.
+  vec3 bounds_min;
+  vec3 bounds_max;
 } VkRendererSubMesh;
 
 typedef struct VkRendererMesh
@@ -187,6 +190,11 @@ typedef struct VkRendererMesh
   VkRendererSubMesh *submeshes;
   u32 submesh_count;
   EgnMeshAsset *asset;
+  // Local-space bounding sphere for frustum/shadow culling. Skinned meshes
+  // are never culled because their vertices move outside the bind pose.
+  vec3 bounds_center;
+  f32 bounds_radius;
+  b8 cullable;
   b8 used;
 } VkRendererMesh;
 

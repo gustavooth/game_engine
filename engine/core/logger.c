@@ -52,8 +52,10 @@ void log_output(LogLevel level, const char *message, ...)
   vsnprintf(out_message, OUTPUT_MESSAGE_LENGTH, message, arg_ptr);
   va_end(arg_ptr);
 
-  char out_message2[OUTPUT_MESSAGE_LENGTH];
-  sprintf(out_message2, "%s%s\n", level_strings[level], out_message);
+  // Room for the level prefix and the newline: the old sprintf() into a buffer
+  // of the same size overflowed the stack on messages close to the limit.
+  char out_message2[OUTPUT_MESSAGE_LENGTH + 16];
+  snprintf(out_message2, sizeof(out_message2), "%s%s\n", level_strings[level], out_message);
 
   if (is_error)
     platform_console_write_error(out_message2, level);
